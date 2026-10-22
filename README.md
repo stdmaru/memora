@@ -41,8 +41,9 @@ O SQLite guarda o último workspace/projeto do painel, preferências pessoais de
 tema e uma trilha de auditoria das operações administrativas e de escrita, sem armazenar
 tokens nem o conteúdo Markdown das memórias. A conta inicial também fica nesse
 banco; sua senha é armazenada com scrypt e salt aleatório. A preferência de
-tema do OOBE fica num cookie não sensível e também nas preferências pessoais da
-conta para a futura etapa de login. O ai-memory continua sendo a fonte
+tema da conta fica nas preferências pessoais do usuário; o OOBE usa a aparência
+do sistema e o login futuro deverá carregar a preferência pessoal após autenticar.
+O ai-memory continua sendo a fonte
 de verdade para workspaces, projetos, páginas, sessões e checkpoints da
 lixeira; esses dados são consultados pela API e não duplicados num cache local.
 O banco usa WAL e deve ser mantido em disco persistente, com backup junto dos

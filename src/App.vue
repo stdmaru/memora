@@ -445,7 +445,8 @@ async function withGlobalLoading(task: () => Promise<void>) {
 }
 
 function activateAppTheme() {
-  theme.value = readThemeCookie()
+  theme.value = 'system'
+  localStorage.removeItem('memora:theme')
   if (!systemTheme) systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
   systemTheme.removeEventListener('change', onSystemThemeChange)
   systemTheme.addEventListener('change', onSystemThemeChange)
@@ -625,22 +626,8 @@ function applyTheme() {
   const resolved = theme.value === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : theme.value
   document.documentElement.dataset.theme = resolved
 }
-function storeThemeCookie(value: Theme) {
-  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
-  document.cookie = `memora_theme=${value}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`
-}
-function readThemeCookie(): Theme {
-  const cookieValue = document.cookie.split('; ').find(item => item.startsWith('memora_theme='))?.split('=').slice(1).join('=')
-  if (cookieValue === 'light' || cookieValue === 'dark' || cookieValue === 'system') return cookieValue
-  const legacyTheme = localStorage.getItem('memora:theme')
-  const initialTheme = legacyTheme === 'light' || legacyTheme === 'dark' || legacyTheme === 'system' ? legacyTheme : 'system'
-  localStorage.removeItem('memora:theme')
-  storeThemeCookie(initialTheme)
-  return initialTheme
-}
 function setTheme(next: Theme) {
   theme.value = next
-  storeThemeCookie(next)
   applyTheme()
   themeMenuOpen.value = false
 }

@@ -31,9 +31,10 @@ local dessas entidades para evitar cache divergente.
 
 O OOBE pode criar apenas o primeiro administrador. O painel ainda não tem login;
 não publicar em rede/VPN até concluir autenticação, sessão e proteção das rotas.
-O tema selecionado antes do login é salvo no cookie `memora_theme`; a preferência
-do administrador é armazenada em `user_preferences` e deverá ser carregada após
-autenticação, substituindo o valor do cookie.
+Antes do login, o OOBE usa somente `prefers-color-scheme` (claro/escuro) e não
+salva uma escolha de aparência no navegador. A preferência pessoal da conta é
+armazenada em `user_preferences` e deverá ser carregada após autenticação,
+substituindo o tema do sistema.
 
 ## Fronteiras de segurança
 

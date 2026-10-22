@@ -37,7 +37,3 @@
 :root[data-theme='dark'] .global-loading-overlay { background: #14131bc2; }
 :root[data-theme='dark'] .global-loading-card { border-color: #403c4b; background: #25232d; }
 :root[data-theme='dark'] .global-loading-card strong { color: #e6e1eb; }
-
-@media (max-width: 520px) {
-  .setup-footer { bottom: 66px !important; }
-}
