@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import SetupView from './components/SetupView.vue'
 
 type Theme = 'light' | 'dark' | 'system'
 type PageLink = { path: string; title?: string; kind?: string }
@@ -21,6 +22,9 @@ type OverviewResponse = {
 }
 
 const sections = ['Visão geral', 'Memórias', 'Sessões', 'Relações', 'Projetos', 'Lixeira']
+const setupChecked = ref(false)
+const setupRequired = ref(false)
+const setupError = ref('')
 const relationTypes = ['causes', 'fixes', 'contradicts'] as const
 const memories = ref<Memory[]>([])
 const sessions = ref<Session[]>([])
@@ -570,15 +574,16 @@ function setTheme(next: Theme) {
   themeMenuOpen.value = false
 }
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
+function retrySetupCheck() { window.location.reload() }
 onMounted(() => {
   systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
   systemTheme.addEventListener('change', onSystemThemeChange)
-  applyTheme()
-  void api<{ level: string; version: string }>('identity')
-    .then(() => { connectionStatus.value = 'ai-memory conectado' })
-    .catch(() => { connectionStatus.value = 'Sem conexão' })
   void (async () => {
     try {
+      const setupStatus = await api<{ configured: boolean }>('setup/status')
+      setupRequired.value = !setupStatus.configured
+      setupChecked.value = true
+      if (setupRequired.value) return
       persistedSettings.value = await api<{ theme?: Theme; scope?: { workspace: string; project: string } }>('settings')
       const legacyTheme = localStorage.getItem('memora:theme')
       if (!persistedSettings.value.theme && (legacyTheme === 'light' || legacyTheme === 'dark' || legacyTheme === 'system')) {
@@ -589,9 +594,13 @@ onMounted(() => {
       if (persistedSettings.value.theme) theme.value = persistedSettings.value.theme
       settingsReady.value = true
       applyTheme()
+      void api<{ level: string; version: string }>('identity')
+        .then(() => { connectionStatus.value = 'ai-memory conectado' })
+        .catch(() => { connectionStatus.value = 'Sem conexão' })
       await loadScopes()
     } catch (error) {
-      apiError.value = error instanceof Error ? error.message : 'Não foi possível carregar configurações e workspaces.'
+      setupError.value = error instanceof Error ? error.message : 'Não foi possível verificar a configuração inicial.'
+      setupChecked.value = true
       connectionStatus.value = 'Sem conexão'
       loading.value = false
     }
@@ -601,7 +610,9 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
 </script>
 
 <template>
-  <main class="app-shell">
+  <main v-if="setupChecked && setupError" class="setup-screen"><section class="setup-card"><a class="setup-brand" href="#"><span class="setup-mark">m</span><span>memora</span></a><p class="setup-kicker">Inicialização</p><h1>Não foi possível verificar o painel.</h1><p class="setup-copy">{{ setupError }}</p><button class="setup-submit" @click="retrySetupCheck">Tentar novamente</button></section></main>
+  <SetupView v-else-if="setupChecked && setupRequired" @continue="setupRequired = false" />
+  <main v-else-if="setupChecked" class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#"><span class="brand-mark">m</span><span>memora</span></a>
       <div class="scope-switcher">
@@ -696,4 +707,5 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       <section class="scope-dialog connections-dialog" role="dialog" aria-modal="true" aria-labelledby="connections-title"><button class="dialog-close" aria-label="Fechar conexões" :disabled="connectionBusy" @click="connectionsOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="connections-title">Conexões da memória</h2><p class="dialog-description">Defina relações tipadas entre esta página e outras memórias do projeto.</p><div class="connection-adder"><select v-model="connectionType" aria-label="Tipo de relação"><option value="causes">Causa</option><option value="fixes">Resolve</option><option value="contradicts">Contradiz</option></select><select v-model="connectionTarget" aria-label="Memória relacionada"><option value="">Escolha uma memória…</option><option v-for="memory in memories.filter(item => item.path !== selectedPage?.path)" :key="memory.path" :value="memory.path">{{ memory.title }} — {{ memory.path }}</option></select><button class="dialog-primary" :disabled="!connectionTarget" @click="addConnection">Adicionar</button></div><div class="connection-groups"><section v-for="kind in relationTypes" :key="kind"><h3>{{ kind === 'causes' ? 'Causa' : kind === 'fixes' ? 'Resolve' : 'Contradiz' }}</h3><div v-if="relationDraft[kind].length" class="connection-chips"><span v-for="target in relationDraft[kind]" :key="target">{{ target }}<button :aria-label="`Remover relação ${target}`" @click="removeConnection(kind, target)">×</button></span></div><small v-else>Nenhuma conexão</small></section></div><div v-if="selectedPage?.links?.length || selectedPage?.backlinks?.length" class="resolved-links"><h3>Links já encontrados no Markdown</h3><button v-for="link in selectedPage?.links" :key="`out-${link.path}`" @click="selectedPath = link.path; connectionsOpen = false">↗ {{ link.title || link.path }}<small>link de saída</small></button><button v-for="link in selectedPage?.backlinks" :key="`in-${link.path}`" @click="selectedPath = link.path; connectionsOpen = false">↙ {{ link.title || link.path }}<small>referencia esta página</small></button></div><p v-if="connectionError" class="dialog-error" role="alert">{{ connectionError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="connectionBusy" @click="connectionsOpen = false">Cancelar</button><button class="dialog-primary" :disabled="connectionBusy" @click="saveConnections">{{ connectionBusy ? 'Salvando…' : 'Salvar conexões' }}</button></footer></section>
     </div>
   </main>
+  <main v-else class="setup-screen"><section class="setup-card"><a class="setup-brand" href="#"><span class="setup-mark">m</span><span>memora</span></a><p class="setup-kicker">Inicialização</p><h1>Preparando seu espaço…</h1><p class="setup-copy">Conferindo se a configuração inicial já foi concluída.</p></section></main>
 </template>

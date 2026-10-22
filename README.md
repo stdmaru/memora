@@ -9,6 +9,11 @@ Interface web para navegar e organizar o serviço [ai-memory](https://github.com
 3. Rode `npm install` e `npm run dev`.
 4. Abra o endereço que o Vite mostrar, normalmente `http://localhost:5173`.
 
+No primeiro acesso, o OOBE solicita nome, e-mail e senha para criar a primeira
+conta de administrador no SQLite. O setup só pode ser concluído uma vez. Esta
+etapa ainda não implementa login; até a próxima etapa de autenticação, mantenha
+o painel apenas em loopback/ambiente local confiável e não o exponha pela VPN.
+
 O servidor usa SQLite embutido no Node.js (Node 22.13 ou mais recente). O banco
 fica por padrão em `./data/ai-memory-manager.sqlite`; esse diretório é criado
 automaticamente e o arquivo não é versionado. Defina `MANAGER_DB_PATH` para
@@ -34,7 +39,8 @@ Para um servidor sem autenticação em loopback, deixe `AI_MEMORY_AUTH_TOKEN` va
 
 O SQLite guarda preferências do painel (tema e último workspace/projeto) e uma
 trilha de auditoria das operações administrativas e de escrita, sem armazenar
-tokens nem o conteúdo Markdown das memórias. O ai-memory continua sendo a fonte
+tokens nem o conteúdo Markdown das memórias. A conta inicial também fica nesse
+banco; sua senha é armazenada com scrypt e salt aleatório. O ai-memory continua sendo a fonte
 de verdade para workspaces, projetos, páginas, sessões e checkpoints da
 lixeira; esses dados são consultados pela API e não duplicados num cache local.
 O banco usa WAL e deve ser mantido em disco persistente, com backup junto dos

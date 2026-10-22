@@ -26,6 +26,14 @@ database.exec(`
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
   CREATE INDEX IF NOT EXISTS audit_log_created_at ON audit_log(created_at DESC);
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
 `)
 
 const getSetting = database.prepare('SELECT value FROM app_settings WHERE key = ?')
@@ -33,6 +41,8 @@ const setSetting = database.prepare(`INSERT INTO app_settings (key, value, updat
   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
 const insertAudit = database.prepare(`INSERT INTO audit_log (action, workspace, project, page_path, outcome, detail)
   VALUES (@action, @workspace, @project, @page_path, @outcome, @detail)`)
+const adminExistsQuery = database.prepare("SELECT 1 AS present FROM users WHERE role = 'admin' LIMIT 1")
+const createAdminQuery = database.prepare("INSERT INTO users (id, name, email, password_hash, role) VALUES (?, ?, ?, ?, 'admin')")
 
 export function readSettings() {
   return Object.fromEntries(database.prepare('SELECT key, value FROM app_settings').all().map(({ key, value }) => [key, JSON.parse(value)]))
@@ -52,6 +62,26 @@ export function writeSettings(settings) {
 
 export function logAudit({ action, workspace = null, project = null, path = null, outcome, detail = null }) {
   insertAudit.run({ action, workspace, project, page_path: path, outcome, detail })
+}
+
+export function hasAdmin() {
+  return Boolean(adminExistsQuery.get())
+}
+
+export function createInitialAdmin({ id, name, email, passwordHash }) {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    if (adminExistsQuery.get()) {
+      database.exec('ROLLBACK')
+      return false
+    }
+    createAdminQuery.run(id, name, email, passwordHash)
+    database.exec('COMMIT')
+    return true
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
 }
 
 console.log(`SQLite do painel: ${databasePath}`)

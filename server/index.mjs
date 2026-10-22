@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { logAudit, readSettings, writeSettings } from './database.mjs'
+import { createInitialAdmin, hasAdmin, logAudit, readSettings, writeSettings } from './database.mjs'
+import { hashPassword } from './passwords.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
 const mcpUrl = process.env.AI_MEMORY_MCP_URL?.replace(/\/+$/, '')
@@ -22,6 +24,17 @@ function send(response, status, payload) {
     'x-content-type-options': 'nosniff',
   })
   response.end(JSON.stringify(payload))
+}
+
+async function readJson(request, maxBytes = 8192) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > maxBytes) throw new UpstreamError('A solicitação excede o tamanho permitido.', 413)
+    chunks.push(chunk)
+  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new UpstreamError('JSON inválido.', 400) }
 }
 
 function missingConfiguration() {
@@ -117,6 +130,29 @@ const server = createServer(async (request, response) => {
   if (!url.pathname.startsWith('/api/manager/')) return send(response, 404, { error: 'Rota não encontrada.' })
 
   try {
+    if (url.pathname === '/api/manager/setup/status' && request.method === 'GET') {
+      return send(response, 200, { configured: hasAdmin() })
+    }
+
+    if (url.pathname === '/api/manager/setup' && request.method === 'POST') {
+      if (hasAdmin()) return send(response, 409, { error: 'A configuração inicial já foi concluída.' })
+      const body = await readJson(request)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return send(response, 400, { error: 'Dados da conta inválidos.' })
+      const name = typeof body.name === 'string' ? body.name.trim() : ''
+      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+      const password = typeof body.password === 'string' ? body.password : ''
+      const passwordConfirmation = typeof body.passwordConfirmation === 'string' ? body.passwordConfirmation : ''
+      if (!name || name.length > 80) return send(response, 400, { error: 'Informe um nome de até 80 caracteres.' })
+      if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(response, 400, { error: 'Informe um endereço de e-mail válido.' })
+      if (Array.from(password).length < 12 || Buffer.byteLength(password, 'utf8') > 1024) return send(response, 400, { error: 'A senha deve ter pelo menos 12 caracteres e no máximo 1024 bytes.' })
+      if (password !== passwordConfirmation) return send(response, 400, { error: 'As senhas não coincidem.' })
+      const passwordHash = await hashPassword(password)
+      const created = createInitialAdmin({ id: randomUUID(), name, email, passwordHash })
+      if (!created) return send(response, 409, { error: 'A configuração inicial já foi concluída.' })
+      logAudit({ action: 'create-initial-admin', outcome: 'success' })
+      return send(response, 201, { configured: true, account: { name, email, role: 'admin' } })
+    }
+
     if (url.pathname === '/api/manager/settings' && request.method === 'GET') {
       return send(response, 200, readSettings())
     }

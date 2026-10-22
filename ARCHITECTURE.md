@@ -22,11 +22,15 @@ sessões no mesmo deploy; não precisamos assumir essa complexidade agora.
 ## Banco local do painel
 
 O backend usa SQLite via `node:sqlite` (Node.js 22.13+) para preferências do
-painel e trilha de auditoria. O arquivo fica em `MANAGER_DB_PATH` (padrão
+painel, trilha de auditoria e contas locais. O arquivo fica em `MANAGER_DB_PATH` (padrão
 `./data/ai-memory-manager.sqlite`), com WAL habilitado. Segredos e conteúdo
-Markdown não são armazenados no banco local. O ai-memory permanece como fonte
+de senha em texto puro e conteúdo Markdown não são armazenados no banco local.
+As contas locais usam hash scrypt com salt aleatório. O ai-memory permanece como fonte
 de verdade para escopos, páginas, sessões e checkpoints; não mantemos cópia
 local dessas entidades para evitar cache divergente.
+
+O OOBE pode criar apenas o primeiro administrador. O painel ainda não tem login;
+não publicar em rede/VPN até concluir autenticação, sessão e proteção das rotas.
 
 ## Fronteiras de segurança
 
