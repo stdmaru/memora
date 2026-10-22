@@ -72,7 +72,7 @@ const apiError = ref('')
 const connectionStatus = ref('Conectando…')
 const theme = ref<Theme>('system')
 const themeMenuOpen = ref(false)
-const persistedSettings = ref<{ theme?: Theme; scope?: { workspace: string; project: string } }>({})
+const persistedSettings = ref<{ scope?: { workspace: string; project: string } }>({})
 const settingsReady = ref(false)
 let systemTheme: MediaQueryList | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
@@ -566,16 +566,29 @@ function applyTheme() {
   const resolved = theme.value === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : theme.value
   document.documentElement.dataset.theme = resolved
 }
+function storeThemeCookie(value: Theme) {
+  const secure = window.location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `memora_theme=${value}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`
+}
+function readThemeCookie(): Theme {
+  const cookieValue = document.cookie.split('; ').find(item => item.startsWith('memora_theme='))?.split('=').slice(1).join('=')
+  if (cookieValue === 'light' || cookieValue === 'dark' || cookieValue === 'system') return cookieValue
+  const legacyTheme = localStorage.getItem('memora:theme')
+  const initialTheme = legacyTheme === 'light' || legacyTheme === 'dark' || legacyTheme === 'system' ? legacyTheme : 'system'
+  localStorage.removeItem('memora:theme')
+  storeThemeCookie(initialTheme)
+  return initialTheme
+}
 function setTheme(next: Theme) {
   theme.value = next
-  persistedSettings.value.theme = next
-  if (settingsReady.value) void api('settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: next }) }).catch(() => {})
+  storeThemeCookie(next)
   applyTheme()
   themeMenuOpen.value = false
 }
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
 function retrySetupCheck() { window.location.reload() }
 onMounted(() => {
+  theme.value = readThemeCookie()
   systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
   systemTheme.addEventListener('change', onSystemThemeChange)
   void (async () => {
@@ -584,14 +597,7 @@ onMounted(() => {
       setupRequired.value = !setupStatus.configured
       setupChecked.value = true
       if (setupRequired.value) return
-      persistedSettings.value = await api<{ theme?: Theme; scope?: { workspace: string; project: string } }>('settings')
-      const legacyTheme = localStorage.getItem('memora:theme')
-      if (!persistedSettings.value.theme && (legacyTheme === 'light' || legacyTheme === 'dark' || legacyTheme === 'system')) {
-        persistedSettings.value.theme = legacyTheme
-        await api('settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: legacyTheme }) })
-      }
-      localStorage.removeItem('memora:theme')
-      if (persistedSettings.value.theme) theme.value = persistedSettings.value.theme
+      persistedSettings.value = await api<{ scope?: { workspace: string; project: string } }>('settings')
       settingsReady.value = true
       applyTheme()
       void api<{ level: string; version: string }>('identity')

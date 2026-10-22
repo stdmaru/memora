@@ -142,15 +142,17 @@ const server = createServer(async (request, response) => {
       const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
       const password = typeof body.password === 'string' ? body.password : ''
       const passwordConfirmation = typeof body.passwordConfirmation === 'string' ? body.passwordConfirmation : ''
+      const theme = body.theme || 'system'
       if (!name || name.length > 80) return send(response, 400, { error: 'Informe um nome de até 80 caracteres.' })
       if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(response, 400, { error: 'Informe um endereço de e-mail válido.' })
       if (Array.from(password).length < 12 || Buffer.byteLength(password, 'utf8') > 1024) return send(response, 400, { error: 'A senha deve ter pelo menos 12 caracteres e no máximo 1024 bytes.' })
       if (password !== passwordConfirmation) return send(response, 400, { error: 'As senhas não coincidem.' })
+      if (!['light', 'dark', 'system'].includes(theme)) return send(response, 400, { error: 'Preferência de tema inválida.' })
       const passwordHash = await hashPassword(password)
-      const created = createInitialAdmin({ id: randomUUID(), name, email, passwordHash })
+      const created = createInitialAdmin({ id: randomUUID(), name, email, passwordHash, theme })
       if (!created) return send(response, 409, { error: 'A configuração inicial já foi concluída.' })
       logAudit({ action: 'create-initial-admin', outcome: 'success' })
-      return send(response, 201, { configured: true, account: { name, email, role: 'admin' } })
+      return send(response, 201, { configured: true, account: { name, email, role: 'admin' }, preferences: { theme } })
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'GET') {
@@ -163,10 +165,6 @@ const server = createServer(async (request, response) => {
       let body
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return send(response, 400, { error: 'JSON inválido.' }) }
       const updates = {}
-      if ('theme' in (body || {})) {
-        if (!['light', 'dark', 'system'].includes(body.theme)) return send(response, 400, { error: 'Tema inválido.' })
-        updates.theme = body.theme
-      }
       if ('scope' in (body || {})) {
         const scope = body.scope
         if (!scope || typeof scope.workspace !== 'string' || typeof scope.project !== 'string' || scope.workspace.length > 200 || scope.project.length > 200) return send(response, 400, { error: 'Escopo inválido.' })

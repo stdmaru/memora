@@ -37,10 +37,12 @@ Para um servidor sem autenticação em loopback, deixe `AI_MEMORY_AUTH_TOKEN` va
 
 ## Dados locais e fonte de verdade
 
-O SQLite guarda preferências do painel (tema e último workspace/projeto) e uma
-trilha de auditoria das operações administrativas e de escrita, sem armazenar
+O SQLite guarda o último workspace/projeto do painel, preferências pessoais de
+tema e uma trilha de auditoria das operações administrativas e de escrita, sem armazenar
 tokens nem o conteúdo Markdown das memórias. A conta inicial também fica nesse
-banco; sua senha é armazenada com scrypt e salt aleatório. O ai-memory continua sendo a fonte
+banco; sua senha é armazenada com scrypt e salt aleatório. A preferência de
+tema do OOBE fica num cookie não sensível e também nas preferências pessoais da
+conta para a futura etapa de login. O ai-memory continua sendo a fonte
 de verdade para workspaces, projetos, páginas, sessões e checkpoints da
 lixeira; esses dados são consultados pela API e não duplicados num cache local.
 O banco usa WAL e deve ser mantido em disco persistente, com backup junto dos
