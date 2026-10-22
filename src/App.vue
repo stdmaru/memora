@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 type Theme = 'light' | 'dark' | 'system'
 type PageLink = { path: string; title?: string; kind?: string }
+type RelationEntry = { source: Memory; targetPath: string; targetTitle: string; kind: string }
 type Memory = { path: string; title: string; summary: string; kind: string; updated: string; updatedAt?: string; tags: string[]; pinned: boolean; bodyMarkdown?: string; tier?: string; frontmatter?: Record<string, unknown>; links?: PageLink[]; backlinks?: PageLink[] }
 type PageSummary = { path: string; title: string; kind?: string; tier?: string; updated_at?: string; snippet?: string; frontmatter?: Record<string, unknown> }
 type WorkspaceSummary = { workspace_name: string; project_count: number; page_count: number; last_updated: string | null }
@@ -101,6 +102,29 @@ function groupByDate<T>(items: T[], getDate: (item: T) => string | undefined) {
 const memoryDateGroups = computed(() => groupByDate(filtered.value, memory => memory.updatedAt))
 const overviewPageDateGroups = computed(() => groupByDate(overview.value?.briefing.recent_pages || [], page => page.updated_at))
 const sessionDateGroups = computed(() => groupByDate(sessions.value, session => session.started_at))
+const relationEntries = computed<RelationEntry[]>(() => {
+  const pagesByPath = new Map(memories.value.map(page => [page.path, page]))
+  const entries: RelationEntry[] = []
+  const seen = new Set<string>()
+  const add = (source: Memory, targetPath: string, kind: string, fallbackTitle?: string) => {
+    if (!targetPath || targetPath === source.path) return
+    const key = `${source.path}\0${kind}\0${targetPath}`
+    if (seen.has(key)) return
+    seen.add(key)
+    entries.push({ source, targetPath, targetTitle: pagesByPath.get(targetPath)?.title || fallbackTitle || targetPath, kind })
+  }
+  for (const page of memories.value) {
+    const rawRelations = page.frontmatter?.relations
+    if (rawRelations && typeof rawRelations === 'object') {
+      for (const kind of relationTypes) {
+        const targets = (rawRelations as Record<string, unknown>)[kind]
+        if (Array.isArray(targets)) for (const target of targets) add(page, String(target), kind)
+      }
+    }
+    for (const link of page.links || []) add(page, link.path, 'link', link.title)
+  }
+  return entries
+})
 const directoryBreadcrumbs = computed(() => currentDirectory.value ? currentDirectory.value.split('/') : [])
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -518,6 +542,12 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
             <section class="overview-panel rules-panel"><header><div><span class="panel-kicker">Referência</span><h2>Regras do projeto</h2></div></header><button v-for="rule in overview.briefing.rules || []" :key="rule.path" @click="openOverviewPage(rule.path)"><span>◇</span><strong>{{ rule.title || rule.path }}</strong></button><p v-if="!overview.briefing.rules?.length" class="subtle-empty">Nenhuma regra registrada.</p></section>
           </aside></div>
         </template>
+      </div>
+      <div v-else-if="activeSection === 'Relações'" class="relations-page">
+        <header class="relations-heading"><div><span class="panel-kicker">Mapa do projeto</span><h2>{{ relationEntries.length }} conexões encontradas</h2><p>Relações tipadas e links Markdown entre as memórias deste escopo.</p></div><button class="panel-link" @click="activeSection = 'Memórias'">Abrir memórias →</button></header>
+        <div v-if="relationEntries.length" class="relation-list"><article v-for="(entry, index) in relationEntries" :key="`${entry.source.path}-${entry.kind}-${entry.targetPath}-${index}`" class="relation-card"><button class="relation-node" @click="openOverviewPage(entry.source.path)"><i class="kind-badge" :class="entry.source.kind.toLowerCase()">{{ entry.source.kind[0] }}</i><span><strong>{{ entry.source.title }}</strong><small>{{ entry.source.path }}</small></span></button><div class="relation-edge"><span>{{ entry.kind === 'causes' ? 'Causa' : entry.kind === 'fixes' ? 'Resolve' : entry.kind === 'contradicts' ? 'Contradiz' : 'Link Markdown' }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></div><button class="relation-node" @click="openOverviewPage(entry.targetPath)"><i class="kind-badge" :class="(memories.find(page => page.path === entry.targetPath)?.kind || 'fact').toLowerCase()">{{ (memories.find(page => page.path === entry.targetPath)?.kind || 'M')[0] }}</i><span><strong>{{ entry.targetTitle }}</strong><small>{{ entry.targetPath }}</small></span></button></article></div>
+        <div v-else-if="loading" class="relations-empty"><span class="loading-spinner"></span><p>Carregando memórias e relações…</p></div>
+        <div v-else class="relations-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></svg><h3>Nenhuma relação encontrada</h3><p>Adicione conexões tipadas em uma memória ou inclua links Markdown entre páginas. Elas aparecerão aqui para exploração.</p><button class="dialog-primary" @click="activeSection = 'Memórias'">Ir para Memórias</button></div>
       </div>
       <div v-else-if="activeSection === 'Sessões'" class="sessions-layout">
         <section class="session-list"><div class="list-toolbar"><div><strong>Sessões capturadas</strong><span>{{ sessions.length }} resultados</span></div></div><div class="session-rows"><section v-for="group in sessionDateGroups" :key="group.label" class="memory-date-group"><h3>{{ group.label }}</h3><button v-for="session in group.items" :key="session.session_id" class="session-row" :class="{ selected: selectedSession?.session_id === session.session_id }" @click="loadSessionObservations(session)"><span class="session-agent">{{ session.agent_kind || 'Agente' }}</span><strong>{{ formatDate(session.started_at) }}</strong><small>{{ session.cwd || 'Diretório não informado' }}</small><span class="session-count">{{ session.observation_count }} observações</span></button></section><p v-if="sessionsLoading" class="empty-state">Carregando sessões…</p><p v-else-if="sessions.length === 0 && !apiError" class="empty-state">Nenhuma sessão visível neste projeto.</p></div></section>
