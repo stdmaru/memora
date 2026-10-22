@@ -25,6 +25,10 @@ const sections = ['Visão geral', 'Memórias', 'Sessões', 'Relações', 'Projet
 const setupChecked = ref(false)
 const setupRequired = ref(false)
 const setupError = ref('')
+const globalLoadingCount = ref(1)
+const globalLoading = computed(() => globalLoadingCount.value > 0)
+const globalLoadingLabel = computed(() => `Carregando ${activeSection.value.toLowerCase()}…`)
+let initializingPanel = false
 const relationTypes = ['causes', 'fixes', 'contradicts'] as const
 const memories = ref<Memory[]>([])
 const sessions = ref<Session[]>([])
@@ -410,6 +414,61 @@ function openProject(project: ProjectSummary) {
   activeSection.value = 'Visão geral'
 }
 
+async function loadSectionData(section: string, includeMemory = true) {
+  if (section === 'Sessões') await loadSessions()
+  else if (section === 'Visão geral') await loadOverview()
+  else if (section === 'Lixeira') await loadTrash()
+  else if (includeMemory && (section === 'Memórias' || section === 'Relações')) await loadMemories(query.value)
+}
+
+async function initializePanel() {
+  initializingPanel = true
+  try {
+    persistedSettings.value = await api<{ scope?: { workspace: string; project: string } }>('settings')
+    await loadScopes()
+    settingsReady.value = true
+    await Promise.all([
+      loadMemories(query.value),
+      ...(activeSection.value === 'Visão geral' ? [loadOverview()] : []),
+      ...(activeSection.value === 'Sessões' ? [loadSessions()] : []),
+      ...(activeSection.value === 'Lixeira' ? [loadTrash()] : []),
+    ])
+  } finally {
+    initializingPanel = false
+  }
+}
+
+async function withGlobalLoading(task: () => Promise<void>) {
+  globalLoadingCount.value += 1
+  try { await task() }
+  finally { globalLoadingCount.value = Math.max(0, globalLoadingCount.value - 1) }
+}
+
+function activateAppTheme() {
+  theme.value = readThemeCookie()
+  if (!systemTheme) systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
+  systemTheme.removeEventListener('change', onSystemThemeChange)
+  systemTheme.addEventListener('change', onSystemThemeChange)
+  applyTheme()
+}
+
+async function continueFromSetup() {
+  setupRequired.value = false
+  activateAppTheme()
+  globalLoadingCount.value += 1
+  try {
+    await initializePanel()
+    void api<{ level: string; version: string }>('identity')
+      .then(() => { connectionStatus.value = 'ai-memory conectado' })
+      .catch(() => { connectionStatus.value = 'Sem conexão' })
+  } catch (error) {
+    apiError.value = error instanceof Error ? error.message : 'Não foi possível carregar o painel.'
+    connectionStatus.value = 'Sem conexão'
+  } finally {
+    globalLoadingCount.value = Math.max(0, globalLoadingCount.value - 1)
+  }
+}
+
 function openPageDeleteDialog() {
   if (!selectedPage.value || !canAdmin.value) return
   pageDeleteDialog.value = { path: selectedPage.value.path, value: '', busy: false, error: '' }
@@ -533,6 +592,7 @@ function changeWorkspace() {
 
 watch([selectedWorkspace, selectedProject], () => {
   if (!selectedWorkspace.value || !selectedProject.value) return
+  if (initializingPanel) return
   if (settingsReady.value) {
     persistedSettings.value.scope = { workspace: selectedWorkspace.value, project: selectedProject.value }
     void api('settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scope: persistedSettings.value.scope }) }).catch(() => {})
@@ -540,19 +600,18 @@ watch([selectedWorkspace, selectedProject], () => {
   selectedPage.value = null
   selectedPath.value = ''
   currentDirectory.value = ''
-  void loadMemories(query.value)
   if (activeSection.value === 'Sessões') {
     selectedSession.value = null
     observations.value = []
-    void loadSessions()
   }
-  if (activeSection.value === 'Visão geral') void loadOverview()
+  void withGlobalLoading(async () => {
+    await Promise.all([loadMemories(query.value), loadSectionData(activeSection.value, false)])
+  })
 })
 
 watch(activeSection, section => {
-  if (section === 'Sessões') void loadSessions()
-  if (section === 'Visão geral') void loadOverview()
-  if (section === 'Lixeira') void loadTrash()
+  if (initializingPanel) return
+  if (['Sessões', 'Visão geral', 'Lixeira', 'Memórias', 'Relações'].includes(section)) void withGlobalLoading(() => loadSectionData(section))
 })
 
 watch(query, value => {
@@ -588,27 +647,27 @@ function setTheme(next: Theme) {
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
 function retrySetupCheck() { window.location.reload() }
 onMounted(() => {
-  theme.value = readThemeCookie()
-  systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
-  systemTheme.addEventListener('change', onSystemThemeChange)
   void (async () => {
     try {
       const setupStatus = await api<{ configured: boolean }>('setup/status')
       setupRequired.value = !setupStatus.configured
       setupChecked.value = true
-      if (setupRequired.value) return
-      persistedSettings.value = await api<{ scope?: { workspace: string; project: string } }>('settings')
-      settingsReady.value = true
-      applyTheme()
+      if (setupRequired.value) {
+        globalLoadingCount.value = 0
+        return
+      }
+      activateAppTheme()
       void api<{ level: string; version: string }>('identity')
         .then(() => { connectionStatus.value = 'ai-memory conectado' })
         .catch(() => { connectionStatus.value = 'Sem conexão' })
-      await loadScopes()
+      await initializePanel()
     } catch (error) {
       setupError.value = error instanceof Error ? error.message : 'Não foi possível verificar a configuração inicial.'
       setupChecked.value = true
       connectionStatus.value = 'Sem conexão'
       loading.value = false
+    } finally {
+      globalLoadingCount.value = 0
     }
   })()
 })
@@ -617,7 +676,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
 
 <template>
   <main v-if="setupChecked && setupError" class="setup-screen"><section class="setup-card"><a class="setup-brand" href="#"><span class="setup-mark">m</span><span>memora</span></a><p class="setup-kicker">Inicialização</p><h1>Não foi possível verificar o painel.</h1><p class="setup-copy">{{ setupError }}</p><button class="setup-submit" @click="retrySetupCheck">Tentar novamente</button></section></main>
-  <SetupView v-else-if="setupChecked && setupRequired" @continue="setupRequired = false" />
+  <SetupView v-else-if="setupChecked && setupRequired" @continue="continueFromSetup" />
   <main v-else-if="setupChecked" class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#"><span class="brand-mark">m</span><span>memora</span></a>
@@ -712,6 +771,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
     <div v-if="connectionsOpen" class="dialog-backdrop" @click.self="connectionsOpen = false" @keydown.esc="connectionsOpen = false">
       <section class="scope-dialog connections-dialog" role="dialog" aria-modal="true" aria-labelledby="connections-title"><button class="dialog-close" aria-label="Fechar conexões" :disabled="connectionBusy" @click="connectionsOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="connections-title">Conexões da memória</h2><p class="dialog-description">Defina relações tipadas entre esta página e outras memórias do projeto.</p><div class="connection-adder"><select v-model="connectionType" aria-label="Tipo de relação"><option value="causes">Causa</option><option value="fixes">Resolve</option><option value="contradicts">Contradiz</option></select><select v-model="connectionTarget" aria-label="Memória relacionada"><option value="">Escolha uma memória…</option><option v-for="memory in memories.filter(item => item.path !== selectedPage?.path)" :key="memory.path" :value="memory.path">{{ memory.title }} — {{ memory.path }}</option></select><button class="dialog-primary" :disabled="!connectionTarget" @click="addConnection">Adicionar</button></div><div class="connection-groups"><section v-for="kind in relationTypes" :key="kind"><h3>{{ kind === 'causes' ? 'Causa' : kind === 'fixes' ? 'Resolve' : 'Contradiz' }}</h3><div v-if="relationDraft[kind].length" class="connection-chips"><span v-for="target in relationDraft[kind]" :key="target">{{ target }}<button :aria-label="`Remover relação ${target}`" @click="removeConnection(kind, target)">×</button></span></div><small v-else>Nenhuma conexão</small></section></div><div v-if="selectedPage?.links?.length || selectedPage?.backlinks?.length" class="resolved-links"><h3>Links já encontrados no Markdown</h3><button v-for="link in selectedPage?.links" :key="`out-${link.path}`" @click="selectedPath = link.path; connectionsOpen = false">↗ {{ link.title || link.path }}<small>link de saída</small></button><button v-for="link in selectedPage?.backlinks" :key="`in-${link.path}`" @click="selectedPath = link.path; connectionsOpen = false">↙ {{ link.title || link.path }}<small>referencia esta página</small></button></div><p v-if="connectionError" class="dialog-error" role="alert">{{ connectionError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="connectionBusy" @click="connectionsOpen = false">Cancelar</button><button class="dialog-primary" :disabled="connectionBusy" @click="saveConnections">{{ connectionBusy ? 'Salvando…' : 'Salvar conexões' }}</button></footer></section>
     </div>
+    <div v-if="globalLoading" class="global-loading-overlay" role="status" aria-live="polite"><div class="global-loading-card"><span class="loading-spinner"></span><strong>{{ globalLoadingLabel }}</strong></div></div>
   </main>
-  <main v-else class="setup-screen"><section class="setup-card"><a class="setup-brand" href="#"><span class="setup-mark">m</span><span>memora</span></a><p class="setup-kicker">Inicialização</p><h1>Preparando seu espaço…</h1><p class="setup-copy">Conferindo se a configuração inicial já foi concluída.</p></section></main>
+  <main v-else class="setup-screen"><section class="setup-card"><a class="setup-brand" href="#"><span class="setup-mark">m</span><span>memora</span></a><p class="setup-kicker">Inicialização</p><span class="loading-spinner"></span><h1>Preparando seu espaço…</h1><p class="setup-copy">Conferindo se a configuração inicial já foi concluída.</p></section></main>
 </template>
