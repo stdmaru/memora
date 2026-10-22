@@ -34,6 +34,7 @@ type ScopeDialog = { action: 'rename' | 'delete'; kind: 'project' | 'workspace';
 const scopeDialog = ref<ScopeDialog | null>(null)
 const pageEditorOpen = ref(false)
 const pageEditorBody = ref('')
+const pageEditorMode = ref<'code' | 'markdown'>('code')
 const pageEditorBusy = ref(false)
 const pageEditorError = ref('')
 const connectionsOpen = ref(false)
@@ -209,7 +210,44 @@ function openPageEditor() {
   if (!selectedPage.value || !canAdmin.value) return
   pageEditorBody.value = selectedPage.value.bodyMarkdown || ''
   pageEditorError.value = ''
+  pageEditorMode.value = 'code'
   pageEditorOpen.value = true
+}
+
+function renderMarkdownPreview(source: string) {
+  const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+  const inline = (value: string) => {
+    let text = escapeHtml(value)
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>')
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/__(.+?)__/g, '<strong>$1</strong>')
+    text = text.replace(/~~(.+?)~~/g, '<del>$1</del>').replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    return text
+  }
+  const lines = source.split(/\r?\n/)
+  const blocks: string[] = []
+  let paragraph: string[] = []
+  let list: string[] = []
+  let code: string[] | null = null
+  const flushParagraph = () => { if (paragraph.length) blocks.push(`<p>${paragraph.map(inline).join('<br>')}</p>`); paragraph = [] }
+  const flushList = () => { if (list.length) blocks.push(`<ul>${list.map(item => `<li>${inline(item)}</li>`).join('')}</ul>`); list = [] }
+  for (const line of lines) {
+    if (code) {
+      if (/^\s*```/.test(line)) { blocks.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`); code = null }
+      else code.push(line)
+      continue
+    }
+    if (/^\s*```/.test(line)) { flushParagraph(); flushList(); code = []; continue }
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+)$/)
+    if (heading) { flushParagraph(); flushList(); const level = heading[1].length; blocks.push(`<h${level}>${inline(heading[2])}</h${level}>`); continue }
+    if (/^\s*[-*_]{3,}\s*$/.test(line)) { flushParagraph(); flushList(); blocks.push('<hr>'); continue }
+    const item = line.match(/^\s*[-*+]\s+(.+)$/)
+    if (item) { flushParagraph(); list.push(item[1]); continue }
+    if (!line.trim()) { flushParagraph(); flushList(); continue }
+    flushList(); paragraph.push(line)
+  }
+  if (code) blocks.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`)
+  flushParagraph(); flushList()
+  return blocks.join('') || '<p class="preview-empty">Nada para pré-visualizar.</p>'
 }
 
 function pageWritePayload(relations?: Record<string, string[]>) {
@@ -494,7 +532,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       </section>
     </div>
     <div v-if="pageEditorOpen" class="dialog-backdrop" @click.self="pageEditorOpen = false" @keydown.esc="pageEditorOpen = false">
-      <section class="scope-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="editor-title"><button class="dialog-close" aria-label="Fechar editor" :disabled="pageEditorBusy" @click="pageEditorOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="editor-title">Editar Markdown</h2><p class="dialog-description">As alterações serão gravadas no ai-memory e versionadas pelo serviço.</p><textarea v-model="pageEditorBody" class="markdown-editor" spellcheck="false" aria-label="Conteúdo Markdown"></textarea><p v-if="pageEditorError" class="dialog-error" role="alert">{{ pageEditorError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="pageEditorBusy" @click="pageEditorOpen = false">Cancelar</button><button class="dialog-primary" :disabled="pageEditorBusy" @click="savePageMarkdown">{{ pageEditorBusy ? 'Salvando…' : 'Salvar Markdown' }}</button></footer></section>
+      <section class="scope-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="editor-title"><button class="dialog-close" aria-label="Fechar editor" :disabled="pageEditorBusy" @click="pageEditorOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="editor-title">Editar Markdown</h2><p class="dialog-description">As alterações serão gravadas no ai-memory e versionadas pelo serviço.</p><div class="editor-tabs" role="tablist" aria-label="Modo do editor"><button role="tab" :aria-selected="pageEditorMode === 'code'" :class="{ active: pageEditorMode === 'code' }" @click="pageEditorMode = 'code'">Código</button><button role="tab" :aria-selected="pageEditorMode === 'markdown'" :class="{ active: pageEditorMode === 'markdown' }" @click="pageEditorMode = 'markdown'">Prévia Markdown</button></div><textarea v-if="pageEditorMode === 'code'" v-model="pageEditorBody" class="markdown-editor" spellcheck="false" aria-label="Código Markdown"></textarea><div v-else class="markdown-preview" role="tabpanel" v-html="renderMarkdownPreview(pageEditorBody)"></div><p v-if="pageEditorError" class="dialog-error" role="alert">{{ pageEditorError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="pageEditorBusy" @click="pageEditorOpen = false">Cancelar</button><button class="dialog-primary" :disabled="pageEditorBusy" @click="savePageMarkdown">{{ pageEditorBusy ? 'Salvando…' : 'Salvar Markdown' }}</button></footer></section>
     </div>
     <div v-if="connectionsOpen" class="dialog-backdrop" @click.self="connectionsOpen = false" @keydown.esc="connectionsOpen = false">
       <section class="scope-dialog connections-dialog" role="dialog" aria-modal="true" aria-labelledby="connections-title"><button class="dialog-close" aria-label="Fechar conexões" :disabled="connectionBusy" @click="connectionsOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="connections-title">Conexões da memória</h2><p class="dialog-description">Defina relações tipadas entre esta página e outras memórias do projeto.</p><div class="connection-adder"><select v-model="connectionType" aria-label="Tipo de relação"><option value="causes">Causa</option><option value="fixes">Resolve</option><option value="contradicts">Contradiz</option></select><select v-model="connectionTarget" aria-label="Memória relacionada"><option value="">Escolha uma memória…</option><option v-for="memory in memories.filter(item => item.path !== selectedPage?.path)" :key="memory.path" :value="memory.path">{{ memory.title }} — {{ memory.path }}</option></select><button class="dialog-primary" :disabled="!connectionTarget" @click="addConnection">Adicionar</button></div><div class="connection-groups"><section v-for="kind in relationTypes" :key="kind"><h3>{{ kind === 'causes' ? 'Causa' : kind === 'fixes' ? 'Resolve' : 'Contradiz' }}</h3><div v-if="relationDraft[kind].length" class="connection-chips"><span v-for="target in relationDraft[kind]" :key="target">{{ target }}<button :aria-label="`Remover relação ${target}`" @click="removeConnection(kind, target)">×</button></span></div><small v-else>Nenhuma conexão</small></section></div><div v-if="selectedPage?.links?.length || selectedPage?.backlinks?.length" class="resolved-links"><h3>Links já encontrados no Markdown</h3><button v-for="link in selectedPage?.links" :key="`out-${link.path}`" @click="selectedPath = link.path; connectionsOpen = false">↗ {{ link.title || link.path }}<small>link de saída</small></button><button v-for="link in selectedPage?.backlinks" :key="`in-${link.path}`" @click="selectedPath = link.path; connectionsOpen = false">↙ {{ link.title || link.path }}<small>referencia esta página</small></button></div><p v-if="connectionError" class="dialog-error" role="alert">{{ connectionError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="connectionBusy" @click="connectionsOpen = false">Cancelar</button><button class="dialog-primary" :disabled="connectionBusy" @click="saveConnections">{{ connectionBusy ? 'Salvando…' : 'Salvar conexões' }}</button></footer></section>
