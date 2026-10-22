@@ -19,6 +19,15 @@ relacionar, reorganizar e remover memórias persistentes compartilhadas entre IA
 Nuxt continua uma opção se o projeto passar a exigir SSR, rotas de servidor ou
 sessões no mesmo deploy; não precisamos assumir essa complexidade agora.
 
+## Banco local do painel
+
+O backend usa SQLite via `node:sqlite` (Node.js 22.13+) para preferências do
+painel e trilha de auditoria. O arquivo fica em `MANAGER_DB_PATH` (padrão
+`./data/ai-memory-manager.sqlite`), com WAL habilitado. Segredos e conteúdo
+Markdown não são armazenados no banco local. O ai-memory permanece como fonte
+de verdade para escopos, páginas, sessões e checkpoints; não mantemos cópia
+local dessas entidades para evitar cache divergente.
+
 ## Fronteiras de segurança
 
 1. A API deve ser a única credencializada para o serviço ai-memory; o browser

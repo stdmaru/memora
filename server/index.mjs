@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { logAudit, readSettings, writeSettings } from './database.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
 const mcpUrl = process.env.AI_MEMORY_MCP_URL?.replace(/\/+$/, '')
@@ -115,10 +116,33 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://127.0.0.1:${port}`)
   if (!url.pathname.startsWith('/api/manager/')) return send(response, 404, { error: 'Rota não encontrada.' })
 
-  const missing = missingConfiguration()
-  if (missing.length) return send(response, 503, { error: 'Configure a URL do ai-memory no .env.', missing })
-
   try {
+    if (url.pathname === '/api/manager/settings' && request.method === 'GET') {
+      return send(response, 200, readSettings())
+    }
+
+    if (url.pathname === '/api/manager/settings' && request.method === 'PUT') {
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      let body
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return send(response, 400, { error: 'JSON inválido.' }) }
+      const updates = {}
+      if ('theme' in (body || {})) {
+        if (!['light', 'dark', 'system'].includes(body.theme)) return send(response, 400, { error: 'Tema inválido.' })
+        updates.theme = body.theme
+      }
+      if ('scope' in (body || {})) {
+        const scope = body.scope
+        if (!scope || typeof scope.workspace !== 'string' || typeof scope.project !== 'string' || scope.workspace.length > 200 || scope.project.length > 200) return send(response, 400, { error: 'Escopo inválido.' })
+        updates.scope = { workspace: scope.workspace, project: scope.project }
+      }
+      if (!Object.keys(updates).length) return send(response, 400, { error: 'Nenhuma configuração válida foi enviada.' })
+      return send(response, 200, writeSettings(updates))
+    }
+
+    const missing = missingConfiguration()
+    if (missing.length) return send(response, 503, { error: 'Configure a URL do ai-memory no .env.', missing })
+
     if (url.pathname === '/api/manager/identity') {
       const identity = await getAiMemory('/identity')
       return send(response, 200, { ...identity, version: identity?.version || 'conectado' })
@@ -160,9 +184,23 @@ const server = createServer(async (request, response) => {
         if (typeof pagePath !== 'string' || !pagePath || pagePath.startsWith('/') || pagePath.split('/').some(segment => !segment || segment === '.' || segment === '..')) return send(response, 400, { error: 'Caminho de página inválido.' })
         if (typeof payload.body !== 'string' || payload.body.length > 1_000_000) return send(response, 400, { error: 'Conteúdo Markdown inválido ou maior que 1 MB.' })
         const writePayload = Object.fromEntries(['workspace', 'project', 'path', 'body', 'title', 'kind', 'tier', 'tags', 'pinned', 'entities', 'abstract', 'relations'].filter(key => key in payload).map(key => [key, payload[key]]))
-        return send(response, 200, await postAdmin(routes[action], writePayload))
+        try {
+          const result = await postAdmin(routes[action], writePayload)
+          logAudit({ action, workspace, project, path: pagePath, outcome: 'success' })
+          return send(response, 200, result)
+        } catch (error) {
+          logAudit({ action, workspace, project, path: pagePath, outcome: 'failure', detail: error instanceof Error ? error.message.slice(0, 500) : 'Falha desconhecida.' })
+          throw error
+        }
       }
-      return send(response, 200, await postAdmin(routes[action], payload))
+      try {
+        const result = await postAdmin(routes[action], payload)
+        logAudit({ action, workspace: payload.workspace || null, project: payload.project || null, outcome: 'success' })
+        return send(response, 200, result)
+      } catch (error) {
+        logAudit({ action, workspace: payload.workspace || null, project: payload.project || null, outcome: 'failure', detail: error instanceof Error ? error.message.slice(0, 500) : 'Falha desconhecida.' })
+        throw error
+      }
     }
 
     if (url.pathname === '/api/manager/trash' && request.method === 'GET') {

@@ -68,6 +68,8 @@ const apiError = ref('')
 const connectionStatus = ref('Conectando…')
 const theme = ref<Theme>('system')
 const themeMenuOpen = ref(false)
+const persistedSettings = ref<{ theme?: Theme; scope?: { workspace: string; project: string } }>({})
+const settingsReady = ref(false)
 let systemTheme: MediaQueryList | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 const workspaceProjects = computed(() => projects.value.filter(project => project.workspace_name === selectedWorkspace.value))
@@ -373,6 +375,8 @@ async function loadScopes() {
   const saved = localStorage.getItem('memora:scope')
   let savedScope: { workspace?: string; project?: string } = {}
   try { savedScope = saved ? JSON.parse(saved) : {} } catch { localStorage.removeItem('memora:scope') }
+  savedScope = persistedSettings.value.scope || savedScope
+  localStorage.removeItem('memora:scope')
   const workspaceExists = (name: string) => workspaces.value.some(item => item.workspace_name === name)
   const preferredWorkspace = workspaceExists(savedScope.workspace || '') ? savedScope.workspace! : workspaceExists(result.preferred.workspace) ? result.preferred.workspace : workspaces.value[0]?.workspace_name || ''
   selectedWorkspace.value = preferredWorkspace
@@ -525,7 +529,10 @@ function changeWorkspace() {
 
 watch([selectedWorkspace, selectedProject], () => {
   if (!selectedWorkspace.value || !selectedProject.value) return
-  localStorage.setItem('memora:scope', JSON.stringify({ workspace: selectedWorkspace.value, project: selectedProject.value }))
+  if (settingsReady.value) {
+    persistedSettings.value.scope = { workspace: selectedWorkspace.value, project: selectedProject.value }
+    void api('settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ scope: persistedSettings.value.scope }) }).catch(() => {})
+  }
   selectedPage.value = null
   selectedPath.value = ''
   currentDirectory.value = ''
@@ -555,22 +562,40 @@ function applyTheme() {
   const resolved = theme.value === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : theme.value
   document.documentElement.dataset.theme = resolved
 }
-function setTheme(next: Theme) { theme.value = next; localStorage.setItem('memora:theme', next); applyTheme(); themeMenuOpen.value = false }
+function setTheme(next: Theme) {
+  theme.value = next
+  persistedSettings.value.theme = next
+  if (settingsReady.value) void api('settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: next }) }).catch(() => {})
+  applyTheme()
+  themeMenuOpen.value = false
+}
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
 onMounted(() => {
-  const saved = localStorage.getItem('memora:theme')
-  if (saved === 'light' || saved === 'dark' || saved === 'system') theme.value = saved
   systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
   systemTheme.addEventListener('change', onSystemThemeChange)
   applyTheme()
   void api<{ level: string; version: string }>('identity')
     .then(() => { connectionStatus.value = 'ai-memory conectado' })
     .catch(() => { connectionStatus.value = 'Sem conexão' })
-  void loadScopes().catch(error => {
-    apiError.value = error instanceof Error ? error.message : 'Não foi possível listar workspaces e projetos.'
-    connectionStatus.value = 'Sem conexão'
-    loading.value = false
-  })
+  void (async () => {
+    try {
+      persistedSettings.value = await api<{ theme?: Theme; scope?: { workspace: string; project: string } }>('settings')
+      const legacyTheme = localStorage.getItem('memora:theme')
+      if (!persistedSettings.value.theme && (legacyTheme === 'light' || legacyTheme === 'dark' || legacyTheme === 'system')) {
+        persistedSettings.value.theme = legacyTheme
+        await api('settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ theme: legacyTheme }) })
+      }
+      localStorage.removeItem('memora:theme')
+      if (persistedSettings.value.theme) theme.value = persistedSettings.value.theme
+      settingsReady.value = true
+      applyTheme()
+      await loadScopes()
+    } catch (error) {
+      apiError.value = error instanceof Error ? error.message : 'Não foi possível carregar configurações e workspaces.'
+      connectionStatus.value = 'Sem conexão'
+      loading.value = false
+    }
+  })()
 })
 onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemThemeChange); clearTimeout(searchTimer) })
 </script>
