@@ -8,6 +8,7 @@ type Memory = { path: string; title: string; summary: string; kind: string; upda
 type PageSummary = { path: string; title: string; kind?: string; tier?: string; updated_at?: string; snippet?: string; frontmatter?: Record<string, unknown> }
 type WorkspaceSummary = { workspace_name: string; project_count: number; page_count: number; last_updated: string | null }
 type ProjectSummary = { workspace_name: string; project_name: string; project_id: string; page_count: number; last_updated: string | null }
+type TrashEntry = { workspace: string; project: string; path: string; deleted_at: string | null; restore_rev: string | null }
 type ScopeResponse = { workspaces: WorkspaceSummary[]; projects: ProjectSummary[]; preferred: { workspace: string; project: string }; canAdmin: boolean }
 type Session = { session_id: string; cwd?: string; agent_kind?: string; started_at: string; ended_at?: string | null; observation_count: number; consolidation?: { state: string; attempts: number } | null }
 type Observation = { id: string; kind: string; title?: string; body?: string; importance?: number; created_at: string }
@@ -30,6 +31,12 @@ const sessionsLoading = ref(false)
 const observationLoading = ref(false)
 const workspaces = ref<WorkspaceSummary[]>([])
 const projects = ref<ProjectSummary[]>([])
+const trashEntries = ref<TrashEntry[]>([])
+const trashLoading = ref(false)
+const trashError = ref('')
+const trashMessage = ref('')
+const restoreDialog = ref<{ entry: TrashEntry; busy: boolean; error: string } | null>(null)
+const pageDeleteDialog = ref<{ path: string; value: string; busy: boolean; error: string } | null>(null)
 const canAdmin = ref(false)
 type ScopeDialog = { action: 'rename' | 'delete'; kind: 'project' | 'workspace'; current: string; value: string; step: 'form' | 'preview' | 'confirm'; preview: Record<string, unknown> | null; error: string; busy: boolean }
 const scopeDialog = ref<ScopeDialog | null>(null)
@@ -64,6 +71,7 @@ const themeMenuOpen = ref(false)
 let systemTheme: MediaQueryList | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 const workspaceProjects = computed(() => projects.value.filter(project => project.workspace_name === selectedWorkspace.value))
+const projectsByWorkspace = computed(() => workspaces.value.map(workspace => ({ ...workspace, projects: projects.value.filter(project => project.workspace_name === workspace.workspace_name) })))
 const selected = computed(() => selectedPage.value ?? memories.value.find(m => m.path === selectedPath.value) ?? memories.value[0])
 const directoryContents = computed(() => {
   const prefix = currentDirectory.value ? `${currentDirectory.value}/` : ''
@@ -374,6 +382,65 @@ async function loadScopes() {
     : availableProjects.some(project => project.project_name === result.preferred.project) ? result.preferred.project : availableProjects[0]?.project_name || ''
 }
 
+async function loadTrash() {
+  if (!canAdmin.value) { trashEntries.value = []; trashError.value = 'Configure AI_MEMORY_ADMIN_TOKEN com um bearer root para consultar e restaurar checkpoints.'; return }
+  trashLoading.value = true
+  trashError.value = ''
+  trashMessage.value = ''
+  try {
+    const result = await api<{ items: TrashEntry[]; checkpoint_limit: number }>('trash')
+    trashEntries.value = result.items || []
+  } catch (error) {
+    trashError.value = error instanceof Error ? error.message : 'Não foi possível consultar os checkpoints de exclusão.'
+    trashEntries.value = []
+  } finally { trashLoading.value = false }
+}
+
+function openProject(project: ProjectSummary) {
+  selectedWorkspace.value = project.workspace_name
+  selectedProject.value = project.project_name
+  activeSection.value = 'Visão geral'
+}
+
+function openPageDeleteDialog() {
+  if (!selectedPage.value || !canAdmin.value) return
+  pageDeleteDialog.value = { path: selectedPage.value.path, value: '', busy: false, error: '' }
+}
+
+async function deleteSelectedPage() {
+  const dialog = pageDeleteDialog.value
+  if (!dialog || dialog.busy || dialog.value !== dialog.path) return
+  dialog.busy = true
+  dialog.error = ''
+  try {
+    await admin('delete-page', { workspace: selectedWorkspace.value, project: selectedProject.value, path: dialog.path })
+    pageDeleteDialog.value = null
+    selectedPage.value = null
+    selectedPath.value = ''
+    await Promise.all([loadMemories(query.value), loadTrash()])
+    trashMessage.value = `“${dialog.path}” foi removida e pode ser restaurada pela Lixeira.`
+  } catch (error) {
+    dialog.error = error instanceof Error ? error.message : 'Não foi possível excluir esta memória.'
+  } finally { if (pageDeleteDialog.value) pageDeleteDialog.value.busy = false }
+}
+
+async function restoreTrashEntry() {
+  const dialog = restoreDialog.value
+  if (!dialog || dialog.busy || !dialog.entry.restore_rev) return
+  dialog.busy = true
+  dialog.error = ''
+  try {
+    await admin('restore-page', { workspace: dialog.entry.workspace, project: dialog.entry.project, path: dialog.entry.path, rev: dialog.entry.restore_rev })
+    const restored = dialog.entry
+    restoreDialog.value = null
+    await loadTrash()
+    if (selectedWorkspace.value === restored.workspace && selectedProject.value === restored.project) await loadMemories(query.value)
+    trashMessage.value = `“${restored.path}” foi restaurada em ${restored.workspace} / ${restored.project}.`
+  } catch (error) {
+    dialog.error = error instanceof Error ? error.message : 'Não foi possível restaurar esta memória.'
+  } finally { if (restoreDialog.value) restoreDialog.value.busy = false }
+}
+
 function admin(action: string, payload: Record<string, unknown>) {
   return api<Record<string, unknown>>('admin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...payload }) })
 }
@@ -474,6 +541,7 @@ watch([selectedWorkspace, selectedProject], () => {
 watch(activeSection, section => {
   if (section === 'Sessões') void loadSessions()
   if (section === 'Visão geral') void loadOverview()
+  if (section === 'Lixeira') void loadTrash()
 })
 
 watch(query, value => {
@@ -543,6 +611,17 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
           </aside></div>
         </template>
       </div>
+      <div v-else-if="activeSection === 'Projetos'" class="projects-page">
+        <header class="projects-intro"><div><span class="panel-kicker">Escopos disponíveis</span><h2>{{ projects.length }} projetos em {{ workspaces.length }} workspaces</h2><p>Escolha um projeto para abrir sua visão geral. Renomeação e exclusão ficam disponíveis para quem tem acesso administrativo.</p></div><span class="projects-total">{{ projects.reduce((total, project) => total + project.page_count, 0) }} memórias</span></header>
+        <section v-for="workspace in projectsByWorkspace" :key="workspace.workspace_name" class="project-workspace"><header><div><span class="workspace-dot"></span><h3>{{ workspace.workspace_name }}</h3></div><span>{{ workspace.project_count }} {{ workspace.project_count === 1 ? 'projeto' : 'projetos' }} · {{ workspace.page_count }} memórias</span></header><div v-if="workspace.projects.length" class="project-grid"><article v-for="project in workspace.projects" :key="project.project_id" class="project-card" :class="{ current: selectedWorkspace === project.workspace_name && selectedProject === project.project_name }"><button class="project-open" @click="openProject(project)"><span class="project-folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17zM3.5 7.5v-2h6l2 2"/></svg></span><span class="project-card-copy"><strong>{{ project.project_name }}</strong><small>{{ project.page_count }} {{ project.page_count === 1 ? 'memória' : 'memórias' }}</small><small>Atualizado {{ formatDate(project.last_updated) }}</small></span><b class="project-chevron">›</b></button><div v-if="canAdmin" class="project-actions"><button title="Renomear projeto" @click="selectedWorkspace = project.workspace_name; selectedProject = project.project_name; manageScope('rename', 'project')">Renomear</button><button class="danger" title="Excluir projeto" @click="selectedWorkspace = project.workspace_name; selectedProject = project.project_name; manageScope('delete', 'project')">Excluir</button></div></article></div><p v-else class="subtle-empty">Este workspace ainda não tem projetos.</p></section>
+      </div>
+      <div v-else-if="activeSection === 'Lixeira'" class="trash-page">
+        <header class="trash-intro"><div><span class="panel-kicker">Recuperação</span><h2>Lixeira de memórias</h2><p>Exclusões recentes registradas nos checkpoints Git do ai-memory. A consulta cobre até os 100 checkpoints mais recentes e não é uma lixeira permanente.</p></div><button class="panel-link" :disabled="trashLoading" @click="loadTrash">{{ trashLoading ? 'Atualizando…' : 'Atualizar' }}</button></header>
+        <p v-if="trashError" class="api-error"><strong>Não foi possível abrir a lixeira.</strong><span>{{ trashError }}</span></p><p v-if="trashMessage" class="trash-success" role="status">{{ trashMessage }}</p>
+        <div v-if="trashLoading" class="relations-empty"><span class="loading-spinner"></span><p>Consultando checkpoints…</p></div>
+        <div v-else-if="trashEntries.length" class="trash-list"><article v-for="entry in trashEntries" :key="`${entry.workspace}/${entry.project}:${entry.path}`" class="trash-card"><span class="trash-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></span><div class="trash-copy"><strong>{{ entry.path }}</strong><small>{{ entry.workspace }} / {{ entry.project }}</small><time>Removida {{ formatDate(entry.deleted_at) }}</time></div><button class="dialog-primary" :disabled="!entry.restore_rev" :title="entry.restore_rev ? 'Restaurar do checkpoint anterior à exclusão' : 'Checkpoint anterior não encontrado entre os 100 mais recentes'" @click="restoreDialog = { entry, busy: false, error: '' }">Restaurar</button></article></div>
+        <div v-else-if="!trashError" class="relations-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><h3>A lixeira está vazia</h3><p>Não foram encontradas exclusões nos checkpoints recentes. As memórias apagadas não são removidas daqui automaticamente se a exclusão não gerou um checkpoint.</p></div>
+      </div>
       <div v-else-if="activeSection === 'Relações'" class="relations-page">
         <header class="relations-heading"><div><span class="panel-kicker">Mapa do projeto</span><h2>{{ relationEntries.length }} conexões encontradas</h2><p>Relações tipadas e links Markdown entre as memórias deste escopo.</p></div><button class="panel-link" @click="activeSection = 'Memórias'">Abrir memórias →</button></header>
         <div v-if="relationEntries.length" class="relation-list"><article v-for="(entry, index) in relationEntries" :key="`${entry.source.path}-${entry.kind}-${entry.targetPath}-${index}`" class="relation-card"><button class="relation-node" @click="openOverviewPage(entry.source.path)"><i class="kind-badge" :class="entry.source.kind.toLowerCase()">{{ entry.source.kind[0] }}</i><span><strong>{{ entry.source.title }}</strong><small>{{ entry.source.path }}</small></span></button><div class="relation-edge"><span>{{ entry.kind === 'causes' ? 'Causa' : entry.kind === 'fixes' ? 'Resolve' : entry.kind === 'contradicts' ? 'Contradiz' : 'Link Markdown' }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></div><button class="relation-node" @click="openOverviewPage(entry.targetPath)"><i class="kind-badge" :class="(memories.find(page => page.path === entry.targetPath)?.kind || 'fact').toLowerCase()">{{ (memories.find(page => page.path === entry.targetPath)?.kind || 'M')[0] }}</i><span><strong>{{ entry.targetTitle }}</strong><small>{{ entry.targetPath }}</small></span></button></article></div>
@@ -555,7 +634,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       </div>
       <div v-else class="workspace">
         <section class="memory-list"><div class="list-toolbar"><div class="list-view-controls"><button class="view-mode" :class="{ active: !categoryMode }" @click="categoryMode = false">Todas</button><button class="view-mode" :class="{ active: categoryMode }" @click="categoryMode = true; currentDirectory = ''">Categorias</button><span>{{ categoryMode ? `${filtered.length} memórias` : `${memories.length} resultados` }}</span></div><button v-if="!categoryMode" class="sort-label">Atualizadas recentemente ↓</button><div v-else class="folder-breadcrumb"><button @click="currentDirectory = ''">Todas as categorias</button><template v-for="(part, index) in directoryBreadcrumbs" :key="`${part}-${index}`"><span>/</span><button :class="{ current: index === directoryBreadcrumbs.length - 1 }" @click="currentDirectory = directoryBreadcrumbs.slice(0, index + 1).join('/')">{{ part }}</button></template></div></div><div v-if="categoryMode && directoryContents.folders.length" class="folder-grid"><button v-for="folder in directoryContents.folders" :key="folder.path" class="folder-card" @click="currentDirectory = folder.path"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17zM3.5 7.5v-2h6l2 2"/></svg><span><strong>{{ folder.name }}</strong><small>{{ folder.count }} {{ folder.count === 1 ? 'memória' : 'memórias' }}</small></span><b>›</b></button></div><div class="memory-rows"><section v-for="group in memoryDateGroups" :key="group.label" class="memory-date-group"><h3>{{ group.label }}</h3><button v-for="memory in group.items" :key="memory.path" class="memory-row" :class="{ selected: selectedPath === memory.path }" @click="selectedPath = memory.path"><i class="kind-badge" :class="memory.kind.toLowerCase()">{{ memory.kind[0] }}</i><span class="memory-copy"><strong>{{ memory.title }} <em v-if="memory.pinned">⌖</em></strong><small>{{ memory.summary }}</small><span class="tag-row"><b v-for="tag in memory.tags" :key="tag">{{ tag }}</b></span></span><time>{{ memory.updated }}</time></button></section><p v-if="loading" class="empty-state">Carregando páginas…</p><p v-else-if="filtered.length === 0 && directoryContents.folders.length === 0 && !apiError" class="empty-state">{{ categoryMode ? 'Esta categoria não contém memórias.' : 'Nenhuma memória encontrada.' }}</p></div></section>
-        <aside v-if="selected" class="detail-panel"><div class="detail-actions"><span class="status-chip">● {{ detailLoading ? 'Carregando' : 'Página' }}</span><button>···</button></div><span class="detail-type">{{ selected.kind }}</span><h2>{{ selected.title }}</h2><p class="detail-path">{{ selected.path }}</p><pre class="markdown-body">{{ selectedPage?.bodyMarkdown || selected.summary }}</pre><div class="detail-section"><h3>Etiquetas</h3><span class="tag-row detail-tags"><b v-for="tag in selected.tags" :key="tag"># {{ tag }}</b><span v-if="selected.tags.length === 0">Sem etiquetas</span></span></div><div class="detail-section metadata"><h3>Informações</h3><p><span>Atualizada</span><strong>{{ selected.updated || '—' }}</strong></p><p><span>Origem</span><strong>ai-memory</strong></p></div><div class="detail-footer"><button :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Editar Markdown' : 'Configure um bearer root para escrever'" @click="openPageEditor">Editar Markdown</button><button :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Gerenciar conexões' : 'Configure um bearer root para escrever'" @click="openConnections">Conexões</button></div></aside>
+        <aside v-if="selected" class="detail-panel"><div class="detail-actions"><span class="status-chip">● {{ detailLoading ? 'Carregando' : 'Página' }}</span><button>···</button></div><span class="detail-type">{{ selected.kind }}</span><h2>{{ selected.title }}</h2><p class="detail-path">{{ selected.path }}</p><pre class="markdown-body">{{ selectedPage?.bodyMarkdown || selected.summary }}</pre><div class="detail-section"><h3>Etiquetas</h3><span class="tag-row detail-tags"><b v-for="tag in selected.tags" :key="tag"># {{ tag }}</b><span v-if="selected.tags.length === 0">Sem etiquetas</span></span></div><div class="detail-section metadata"><h3>Informações</h3><p><span>Atualizada</span><strong>{{ selected.updated || '—' }}</strong></p><p><span>Origem</span><strong>ai-memory</strong></p></div><div class="detail-footer"><button :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Editar Markdown' : 'Configure um bearer root para escrever'" @click="openPageEditor">Editar Markdown</button><button :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Gerenciar conexões' : 'Configure um bearer root para escrever'" @click="openConnections">Conexões</button><button class="danger" :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Mover para Lixeira' : 'Configure um bearer root para excluir'" @click="openPageDeleteDialog">Excluir</button></div></aside>
       </div>
     </section>
     <div v-if="scopeDialog" class="dialog-backdrop" @click.self="closeScopeDialog" @keydown.esc="closeScopeDialog">
@@ -578,6 +657,12 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         <p v-if="scopeDialog.error" class="dialog-error" role="alert"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5m0 3h.01"/></svg>{{ scopeDialog.error }}</p>
         <footer class="dialog-actions"><button class="dialog-secondary" :disabled="scopeDialog.busy" @click="closeScopeDialog">Cancelar</button><button v-if="scopeDialog.action === 'rename'" class="dialog-primary" :disabled="scopeDialog.busy || !scopeDialog.value.trim() || scopeDialog.value.trim() === scopeDialog.current" @click="submitScopeDialog">{{ scopeDialog.busy ? 'Salvando…' : 'Salvar nome' }}</button><button v-else-if="scopeDialog.step === 'preview'" class="dialog-primary danger-button" :disabled="scopeDialog.busy" @click="submitScopeDialog">Continuar para confirmação</button><button v-else-if="scopeDialog.step === 'confirm'" class="dialog-primary danger-button" :disabled="scopeDialog.busy || scopeDialog.value !== scopeDialog.current" @click="submitScopeDialog">{{ scopeDialog.busy ? 'Excluindo…' : 'Excluir permanentemente' }}</button></footer>
       </section>
+    </div>
+    <div v-if="pageDeleteDialog" class="dialog-backdrop" @click.self="!pageDeleteDialog.busy && (pageDeleteDialog = null)" @keydown.esc="!pageDeleteDialog.busy && (pageDeleteDialog = null)">
+      <section class="scope-dialog" role="dialog" aria-modal="true" aria-labelledby="page-delete-title"><button class="dialog-close" aria-label="Fechar" :disabled="pageDeleteDialog.busy" @click="pageDeleteDialog = null"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol destructive"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></div><p class="dialog-eyebrow">{{ selectedWorkspace }} / {{ selectedProject }}</p><h2 id="page-delete-title">Mover memória para a Lixeira</h2><p class="dialog-description">A memória <strong>{{ pageDeleteDialog.path }}</strong> será removida do projeto. Ela poderá ser restaurada a partir dos checkpoints recentes.</p><label class="dialog-field">Digite o caminho para confirmar<input v-model="pageDeleteDialog.value" autocomplete="off" spellcheck="false" :placeholder="pageDeleteDialog.path" @keydown.enter="deleteSelectedPage"></label><p v-if="pageDeleteDialog.error" class="dialog-error" role="alert">{{ pageDeleteDialog.error }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="pageDeleteDialog.busy" @click="pageDeleteDialog = null">Cancelar</button><button class="dialog-primary danger-button" :disabled="pageDeleteDialog.busy || pageDeleteDialog.value !== pageDeleteDialog.path" @click="deleteSelectedPage">{{ pageDeleteDialog.busy ? 'Excluindo…' : 'Mover para Lixeira' }}</button></footer></section>
+    </div>
+    <div v-if="restoreDialog" class="dialog-backdrop" @click.self="!restoreDialog.busy && (restoreDialog = null)" @keydown.esc="!restoreDialog.busy && (restoreDialog = null)">
+      <section class="scope-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-title"><button class="dialog-close" aria-label="Fechar" :disabled="restoreDialog.busy" @click="restoreDialog = null"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.5M4 4v4.5h4.5M12 8v4l3 2"/></svg></div><p class="dialog-eyebrow">{{ restoreDialog.entry.workspace }} / {{ restoreDialog.entry.project }}</p><h2 id="restore-title">Restaurar memória?</h2><p class="dialog-description">O conteúdo de <strong>{{ restoreDialog.entry.path }}</strong> será restaurado do checkpoint anterior à exclusão e voltará a aparecer nas memórias. Se essa página foi recriada depois, a restauração substituirá o conteúdo atual.</p><p v-if="restoreDialog.error" class="dialog-error" role="alert">{{ restoreDialog.error }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="restoreDialog.busy" @click="restoreDialog = null">Cancelar</button><button class="dialog-primary" :disabled="restoreDialog.busy" @click="restoreTrashEntry">{{ restoreDialog.busy ? 'Restaurando…' : 'Restaurar memória' }}</button></footer></section>
     </div>
     <div v-if="pageEditorOpen" class="dialog-backdrop" @click.self="pageEditorOpen = false" @keydown.esc="pageEditorOpen = false">
       <section class="scope-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="editor-title"><button class="dialog-close" aria-label="Fechar editor" :disabled="pageEditorBusy" @click="pageEditorOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="editor-title">Editar Markdown</h2><p class="dialog-description">As alterações serão gravadas no ai-memory e versionadas pelo serviço.</p><div class="editor-tabs" role="tablist" aria-label="Modo do editor"><button role="tab" :aria-selected="pageEditorMode === 'code'" :class="{ active: pageEditorMode === 'code' }" @click="pageEditorMode = 'code'">Código</button><button role="tab" :aria-selected="pageEditorMode === 'markdown'" :class="{ active: pageEditorMode === 'markdown' }" @click="pageEditorMode = 'markdown'">Prévia Markdown</button></div><textarea v-if="pageEditorMode === 'code'" v-model="pageEditorBody" class="markdown-editor" spellcheck="false" aria-label="Código Markdown"></textarea><div v-else class="markdown-preview" role="tabpanel" v-html="renderMarkdownPreview(pageEditorBody)"></div><p v-if="pageEditorError" class="dialog-error" role="alert">{{ pageEditorError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="pageEditorBusy" @click="pageEditorOpen = false">Cancelar</button><button class="dialog-primary" :disabled="pageEditorBusy" @click="savePageMarkdown">{{ pageEditorBusy ? 'Salvando…' : 'Salvar Markdown' }}</button></footer></section>

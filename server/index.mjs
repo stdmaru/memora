@@ -80,6 +80,24 @@ async function postAdmin(path, payload) {
   return result
 }
 
+async function getAdmin(path) {
+  if (!adminToken) throw new UpstreamError('Configure AI_MEMORY_ADMIN_TOKEN com o bearer root do ai-memory para acessar a lixeira.', 503)
+  let response
+  try {
+    response = await fetch(`${getAiMemoryBaseUrl()}${path}`, {
+      headers: { accept: 'application/json', authorization: `Bearer ${adminToken}` },
+      signal: AbortSignal.timeout(20000),
+    })
+  } catch {
+    throw new UpstreamError('Não foi possível conectar à API administrativa do ai-memory.')
+  }
+  const body = await response.text()
+  let result
+  try { result = body ? JSON.parse(body) : null } catch { result = null }
+  if (!response.ok) throw new UpstreamError(result?.error || `ai-memory respondeu HTTP ${response.status}.`, response.status)
+  return result
+}
+
 function scopeFrom(url) {
   const workspace = url.searchParams.get('workspace')?.trim()
   const project = url.searchParams.get('project')?.trim()
@@ -130,6 +148,8 @@ const server = createServer(async (request, response) => {
         'rename-workspace': '/admin/rename-workspace',
         'purge-project': '/admin/purge-project',
         'delete-workspace': '/admin/delete-workspace',
+        'delete-page': '/admin/delete-page',
+        'restore-page': '/admin/restore-page',
         'write-page': '/admin/write-page',
       }
       if (!routes[action]) return send(response, 400, { error: 'Ação administrativa inválida.' })
@@ -143,6 +163,27 @@ const server = createServer(async (request, response) => {
         return send(response, 200, await postAdmin(routes[action], writePayload))
       }
       return send(response, 200, await postAdmin(routes[action], payload))
+    }
+
+    if (url.pathname === '/api/manager/trash' && request.method === 'GET') {
+      const checkpoints = await getAdmin('/admin/checkpoints?limit=100')
+      const ordered = (Array.isArray(checkpoints) ? checkpoints : []).filter(item => item?.oid && item?.summary).sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
+      const deleted = new Map()
+      for (let index = 0; index < ordered.length; index += 1) {
+        const checkpoint = ordered[index]
+        const match = String(checkpoint.summary).match(/^delete-page ([^/]+)\/([^:]+): (.+)$/)
+        if (!match) continue
+        const [, workspace, project, pagePath] = match
+        const previous = ordered[index - 1]
+        const preSummary = `pre-delete-page ${workspace}/${project}: ${pagePath}`
+        const preCheckpoint = [...ordered.slice(0, index)].reverse().find(item => item.summary === preSummary) || previous
+        const key = `${workspace}\0${project}\0${pagePath}`
+        const current = deleted.get(key)
+        if (!current || String(checkpoint.time || '') > current.deleted_at) {
+          deleted.set(key, { workspace, project, path: pagePath, deleted_at: checkpoint.time || null, restore_rev: preCheckpoint?.oid || null })
+        }
+      }
+      return send(response, 200, { items: [...deleted.values()].sort((a, b) => String(b.deleted_at || '').localeCompare(String(a.deleted_at || ''))), checkpoint_limit: 100 })
     }
 
     if (url.pathname === '/api/manager/pages') {
