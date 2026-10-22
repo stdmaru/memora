@@ -11,6 +11,12 @@ type ScopeResponse = { workspaces: WorkspaceSummary[]; projects: ProjectSummary[
 type Session = { session_id: string; cwd?: string; agent_kind?: string; started_at: string; ended_at?: string | null; observation_count: number; consolidation?: { state: string; attempts: number } | null }
 type Observation = { id: string; kind: string; title?: string; body?: string; importance?: number; created_at: string }
 type SessionDetail = { session: Session; observations: Observation[]; total: number; offset: number; elided_other_scope: number }
+type OverviewActivity = { days: number; sessions: number; observations: number; pages_updated: number }
+type OverviewResponse = {
+  handoff: { agent?: string; at?: string; project?: string; summary?: string; open_questions?: string[]; next_steps?: string[] } | null
+  briefing: { counts: { pages_latest?: number; pages_all?: number; sessions?: number; observations?: number }; activity_7d?: OverviewActivity; activity_30d?: OverviewActivity; last_observation_at?: string | null; pending_handoff_count?: number; recent_pages?: PageSummary[]; rules?: PageSummary[]; slots?: PageSummary[] }
+  health: { stale?: number; duplicates?: number; contradictions?: number; orphans?: number; audited_at?: string | null }
+}
 
 const sections = ['Visão geral', 'Memórias', 'Sessões', 'Relações', 'Projetos', 'Lixeira']
 const relationTypes = ['causes', 'fixes', 'contradicts'] as const
@@ -36,6 +42,9 @@ const connectionTarget = ref('')
 const connectionBusy = ref(false)
 const connectionError = ref('')
 const relationDraft = ref<Record<string, string[]>>({ causes: [], fixes: [], contradicts: [] })
+const overview = ref<OverviewResponse | null>(null)
+const overviewLoading = ref(false)
+const overviewError = ref('')
 const selectedWorkspace = ref('')
 const selectedProject = ref('')
 const activeSection = ref('Memórias')
@@ -149,6 +158,22 @@ async function loadSessions() {
     apiError.value = error instanceof Error ? error.message : 'Não foi possível listar as sessões.'
     sessions.value = []
   } finally { sessionsLoading.value = false }
+}
+
+async function loadOverview() {
+  if (!selectedWorkspace.value || !selectedProject.value) { overview.value = null; overviewLoading.value = false; return }
+  overviewLoading.value = true
+  overviewError.value = ''
+  try { overview.value = await api<OverviewResponse>(`overview?${scopeQuery()}`) }
+  catch (error) { overviewError.value = error instanceof Error ? error.message : 'Não foi possível carregar a visão geral.'; overview.value = null }
+  finally { overviewLoading.value = false }
+}
+
+function openOverviewPage(path: string) {
+  activeSection.value = 'Memórias'
+  categoryMode.value = false
+  currentDirectory.value = ''
+  selectedPath.value = path
 }
 
 async function loadSessionObservations(session: Session, offset = 0) {
@@ -363,10 +388,12 @@ watch([selectedWorkspace, selectedProject], () => {
     observations.value = []
     void loadSessions()
   }
+  if (activeSection.value === 'Visão geral') void loadOverview()
 })
 
 watch(activeSection, section => {
   if (section === 'Sessões') void loadSessions()
+  if (section === 'Visão geral') void loadOverview()
 })
 
 watch(query, value => {
@@ -418,10 +445,25 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
     <section class="content">
       <header class="topbar"><label class="search"><span>⌕</span><input v-model="query" type="search" placeholder="Buscar neste projeto…"><kbd>⌘ K</kbd></label><div class="topbar-actions"><div class="theme-control"><button class="theme-button" :aria-expanded="themeMenuOpen" aria-label="Escolher aparência" @click="themeMenuOpen = !themeMenuOpen">◐ <span>{{ theme === 'system' ? 'Sistema' : theme === 'dark' ? 'Escuro' : 'Claro' }}</span></button><div v-if="themeMenuOpen" class="theme-menu"><p>Aparência</p><button :class="{ selected: theme === 'light' }" @click="setTheme('light')">☼ Claro</button><button :class="{ selected: theme === 'dark' }" @click="setTheme('dark')">◐ Escuro</button><button :class="{ selected: theme === 'system' }" @click="setTheme('system')">◒ Sistema <small>automático</small></button></div></div><button class="help-button">?</button></div></header>
       <div class="compact-scope"><label>Workspace<select v-model="selectedWorkspace" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select></label><label>Projeto<select v-model="selectedProject" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select></label></div>
-      <div class="page-heading"><div><p class="eyebrow">{{ selectedWorkspace }} / {{ selectedProject }}</p><h1>{{ activeSection === 'Sessões' ? 'Sessões do projeto' : 'Suas memórias' }}</h1><p>{{ activeSection === 'Sessões' ? 'Revise conversas e observações capturadas pelas suas IAs.' : 'Uma visão humana daquilo que suas IAs sabem e compartilham.' }}</p></div><span class="scope-label">{{ activeSection === 'Sessões' ? `${sessions.length} sessões` : `${memories.length} páginas` }}</span></div>
-      <div v-if="apiError" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
-      <div class="overview-cards"><article><i class="violet">◫</i><div><strong>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ activeSection === 'Sessões' ? (sessionsLoading ? 'Carregando…' : 'escopo selecionado') : (loading ? 'Carregando…' : 'escopo selecionado') }}</small></article><article><i class="orange">⌘</i><div><strong>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
-      <div v-if="activeSection === 'Sessões'" class="sessions-layout">
+      <div class="page-heading"><div><p class="eyebrow">{{ selectedWorkspace }} / {{ selectedProject }}</p><h1>{{ activeSection === 'Sessões' ? 'Sessões do projeto' : activeSection === 'Visão geral' ? 'Visão geral' : activeSection === 'Memórias' ? 'Suas memórias' : activeSection }}</h1><p>{{ activeSection === 'Sessões' ? 'Revise conversas e observações capturadas pelas suas IAs.' : activeSection === 'Visão geral' ? 'Um resumo da atividade e da saúde da memória deste projeto.' : activeSection === 'Memórias' ? 'Navegue e explore o conteúdo persistente das suas IAs.' : 'Explore este espaço do ai-memory.' }}</p></div><span class="scope-label">{{ activeSection === 'Sessões' ? `${sessions.length} sessões` : activeSection === 'Visão geral' ? 'resumo do escopo' : `${memories.length} páginas` }}</span></div>
+      <div v-if="apiError && activeSection !== 'Visão geral'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
+      <div v-if="activeSection !== 'Visão geral'" class="overview-cards"><article><i class="violet">◫</i><div><strong>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ activeSection === 'Sessões' ? (sessionsLoading ? 'Carregando…' : 'escopo selecionado') : (loading ? 'Carregando…' : 'escopo selecionado') }}</small></article><article><i class="orange">⌘</i><div><strong>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
+      <div v-if="activeSection === 'Visão geral'" class="overview-page">
+        <div v-if="overviewError" class="api-error"><strong>Não foi possível carregar o resumo do projeto.</strong><span>{{ overviewError }}</span></div>
+        <div v-else-if="overviewLoading" class="overview-loading"><span class="loading-spinner"></span>Carregando atividade do projeto…</div>
+        <template v-else-if="overview">
+          <div class="overview-metrics"><article><span class="metric-icon purple">▤</span><div><strong>{{ overview.briefing.counts.pages_latest ?? 0 }}</strong><small>memórias atuais</small></div></article><article><span class="metric-icon coral">◷</span><div><strong>{{ overview.briefing.counts.sessions ?? 0 }}</strong><small>sessões registradas</small></div></article><article><span class="metric-icon green">≋</span><div><strong>{{ overview.briefing.counts.observations ?? 0 }}</strong><small>observações capturadas</small></div></article><article><span class="metric-icon amber">↗</span><div><strong>{{ overview.briefing.pending_handoff_count ?? 0 }}</strong><small>handoffs abertos</small></div></article></div>
+          <div class="overview-grid"><div class="overview-main">
+            <section class="overview-panel"><header><div><span class="panel-kicker">Últimos 7 dias</span><h2>Atividade recente</h2></div><span class="activity-total">{{ overview.briefing.activity_7d?.sessions ?? 0 }} sessões</span></header><div class="activity-stats"><div><strong>{{ overview.briefing.activity_7d?.observations ?? 0 }}</strong><span>observações</span></div><div><strong>{{ overview.briefing.activity_7d?.pages_updated ?? 0 }}</strong><span>memórias atualizadas</span></div><div><strong>{{ overview.briefing.activity_30d?.sessions ?? 0 }}</strong><span>sessões em 30 dias</span></div></div><div class="activity-comparison"><span>30 dias</span><div><i :style="{ width: `${Math.min(100, ((overview.briefing.activity_7d?.observations || 0) / Math.max(1, overview.briefing.activity_30d?.observations || 0)) * 100)}%` }"></i></div><strong>{{ overview.briefing.activity_30d?.observations ?? 0 }} observações</strong></div></section>
+            <section class="overview-panel"><header><div><span class="panel-kicker">Conteúdo</span><h2>Memórias recentes</h2></div><button class="panel-link" @click="activeSection = 'Memórias'">Ver todas →</button></header><div class="recent-pages"><button v-for="page in overview.briefing.recent_pages || []" :key="page.path" @click="openOverviewPage(page.path)"><i class="kind-badge" :class="(page.kind || 'fact').toLowerCase()">{{ (page.kind || 'M')[0] }}</i><span><strong>{{ page.title || page.path }}</strong><small>{{ page.path }}</small></span><time>{{ formatDate(page.updated_at) }}</time></button><p v-if="!overview.briefing.recent_pages?.length" class="empty-state">Ainda não há memórias neste projeto.</p></div></section>
+          </div><aside class="overview-side">
+            <section class="overview-panel health-panel"><header><div><span class="panel-kicker">Qualidade</span><h2>Saúde da memória</h2></div><span class="health-dot"></span></header><div class="health-list"><div><span>Memórias desatualizadas</span><strong>{{ overview.health.stale ?? 0 }}</strong></div><div><span>Possíveis duplicatas</span><strong>{{ overview.health.duplicates ?? 0 }}</strong></div><div><span>Contradições</span><strong>{{ overview.health.contradictions ?? 0 }}</strong></div><div><span>Memórias órfãs</span><strong>{{ overview.health.orphans ?? 0 }}</strong></div></div><small v-if="overview.health.audited_at" class="health-audit">Auditoria {{ formatDate(overview.health.audited_at) }}</small></section>
+            <section v-if="overview.handoff" class="overview-panel handoff-panel"><header><div><span class="panel-kicker">Continuidade</span><h2>Handoff aberto</h2></div><span class="handoff-mark">↗</span></header><p>{{ overview.handoff.summary || 'Há contexto aguardando a próxima sessão.' }}</p><small>{{ overview.handoff.agent || 'Agente' }} · {{ formatDate(overview.handoff.at) }}</small><ul v-if="overview.handoff.next_steps?.length"><li v-for="step in overview.handoff.next_steps.slice(0, 3)" :key="step">{{ step }}</li></ul></section>
+            <section class="overview-panel rules-panel"><header><div><span class="panel-kicker">Referência</span><h2>Regras do projeto</h2></div></header><button v-for="rule in overview.briefing.rules || []" :key="rule.path" @click="openOverviewPage(rule.path)"><span>◇</span><strong>{{ rule.title || rule.path }}</strong></button><p v-if="!overview.briefing.rules?.length" class="subtle-empty">Nenhuma regra registrada.</p></section>
+          </aside></div>
+        </template>
+      </div>
+      <div v-else-if="activeSection === 'Sessões'" class="sessions-layout">
         <section class="session-list"><div class="list-toolbar"><div><strong>Sessões capturadas</strong><span>{{ sessions.length }} resultados</span></div></div><div class="session-rows"><button v-for="session in sessions" :key="session.session_id" class="session-row" :class="{ selected: selectedSession?.session_id === session.session_id }" @click="loadSessionObservations(session)"><span class="session-agent">{{ session.agent_kind || 'Agente' }}</span><strong>{{ formatDate(session.started_at) }}</strong><small>{{ session.cwd || 'Diretório não informado' }}</small><span class="session-count">{{ session.observation_count }} observações</span></button><p v-if="sessionsLoading" class="empty-state">Carregando sessões…</p><p v-else-if="sessions.length === 0 && !apiError" class="empty-state">Nenhuma sessão visível neste projeto.</p></div></section>
         <section class="session-detail"><template v-if="selectedSession"><header><span class="session-agent">{{ selectedSession.agent_kind || 'Agente' }}</span><h2>{{ formatDate(selectedSession.started_at) }}</h2><p>{{ selectedSession.cwd || 'Diretório não informado' }}</p><div class="session-meta"><span>{{ selectedSession.ended_at ? `Encerrada ${formatDate(selectedSession.ended_at)}` : 'Sessão em andamento' }}</span><span>{{ sessionTotal }} observações</span><span v-if="selectedSession.consolidation">Consolidação: {{ selectedSession.consolidation.state }}</span></div></header><div class="observation-list"><article v-for="observation in observations" :key="observation.id" class="observation-card"><div><strong>{{ observation.title || observation.kind }}</strong><time>{{ formatDate(observation.created_at) }}</time></div><pre>{{ observation.body || 'Sem conteúdo registrado.' }}</pre></article><p v-if="observationLoading" class="empty-state">Carregando observações…</p><p v-else-if="observations.length === 0 && !apiError" class="empty-state">Esta sessão não possui observações visíveis no projeto.</p><button v-if="observations.length < sessionTotal" class="load-more" :disabled="observationLoading" @click="loadSessionObservations(selectedSession!, observations.length)">Carregar mais observações</button></div></template><p v-else class="empty-state">Selecione uma sessão para revisar as observações.</p></section>
       </div>

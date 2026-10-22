@@ -156,6 +156,12 @@ const server = createServer(async (request, response) => {
       return send(response, 200, Array.isArray(pages) ? pages : [])
     }
 
+    if (url.pathname === '/api/manager/overview') {
+      const scope = scopeFrom(url)
+      const endpoint = `${encodedScopePath(scope)}/overview?limit=10`
+      return send(response, 200, await getAiMemory(endpoint))
+    }
+
     if (url.pathname === '/api/manager/page') {
       const scope = scopeFrom(url)
       const pagePath = url.searchParams.get('path')
