@@ -88,6 +88,13 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
 const workspaceProjects = computed(() => projects.value.filter(project => project.workspace_name === selectedWorkspace.value))
 const projectsByWorkspace = computed(() => workspaces.value.map(workspace => ({ ...workspace, projects: projects.value.filter(project => project.workspace_name === workspace.workspace_name) })))
 const selected = computed(() => selectedPage.value ?? memories.value.find(m => m.path === selectedPath.value) ?? memories.value[0])
+function compareMemoriesByUpdatedAt(a: Memory, b: Memory) {
+  const aUpdated = a.updatedAt ? Date.parse(a.updatedAt) : NaN
+  const bUpdated = b.updatedAt ? Date.parse(b.updatedAt) : NaN
+  if (Number.isFinite(aUpdated) && Number.isFinite(bUpdated) && aUpdated !== bUpdated) return bUpdated - aUpdated
+  if (Number.isFinite(aUpdated) !== Number.isFinite(bUpdated)) return Number.isFinite(aUpdated) ? -1 : 1
+  return a.path.localeCompare(b.path)
+}
 const directoryContents = computed(() => {
   const prefix = currentDirectory.value ? `${currentDirectory.value}/` : ''
   const folders = new Map<string, number>()
@@ -103,7 +110,7 @@ const directoryContents = computed(() => {
   }
   return {
     folders: [...folders].map(([name, count]) => ({ name, path: prefix ? `${currentDirectory.value}/${name}` : name, count })).sort((a, b) => a.name.localeCompare(b.name)),
-    pages: pages.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')),
+    pages: pages.sort(compareMemoriesByUpdatedAt),
   }
 })
 const filtered = computed(() => categoryMode.value ? directoryContents.value.pages : memories.value)
@@ -202,7 +209,7 @@ async function loadMemories(search = '') {
   try {
     const query = search.trim()
     const pages = await api<PageSummary[]>(`pages?${scopeQuery()}&limit=100${query ? `&q=${encodeURIComponent(query)}` : ''}`)
-    memories.value = pages.map(fromSummary)
+    memories.value = pages.map(fromSummary).sort(compareMemoriesByUpdatedAt)
     if (!memories.value.some(page => page.path === selectedPath.value)) selectedPath.value = memories.value[0]?.path || ''
   } catch (error) {
     apiError.value = error instanceof Error ? error.message : 'Falha ao carregar memórias.'
