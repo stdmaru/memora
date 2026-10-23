@@ -63,6 +63,7 @@ const bulkDeleteDialog = ref<BulkDeleteDialog | null>(null)
 const categoryCreateDialog = ref<CategoryCreateDialog | null>(null)
 const selectedMemoryPaths = ref<string[]>([])
 const memoryActionNotice = ref('')
+const hideSessions = ref(false)
 const canAdmin = ref(false)
 type ScopeDialog = { action: 'rename' | 'delete'; kind: 'project' | 'workspace'; current: string; value: string; step: 'form' | 'preview' | 'confirm'; preview: Record<string, unknown> | null; error: string; busy: boolean }
 const scopeDialog = ref<ScopeDialog | null>(null)
@@ -103,7 +104,12 @@ let systemTheme: MediaQueryList | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 const workspaceProjects = computed(() => projects.value.filter(project => project.workspace_name === selectedWorkspace.value))
 const projectsByWorkspace = computed(() => workspaces.value.map(workspace => ({ ...workspace, projects: projects.value.filter(project => project.workspace_name === workspace.workspace_name) })))
-const selected = computed(() => selectedPage.value ?? memories.value.find(m => m.path === selectedPath.value) ?? memories.value[0])
+function isSessionMemory(memory: Memory) {
+  return memory.kind.toLowerCase() === 'session' || /^sessions\//i.test(memory.path)
+}
+const selected = computed(() => selectedPage.value
+  ?? memories.value.find(memory => memory.path === selectedPath.value && (!hideSessions.value || !isSessionMemory(memory)))
+  ?? memories.value.find(memory => !hideSessions.value || !isSessionMemory(memory)))
 function compareMemoriesByUpdatedAt(a: Memory, b: Memory) {
   const aUpdated = a.updatedAt ? Date.parse(a.updatedAt) : NaN
   const bUpdated = b.updatedAt ? Date.parse(b.updatedAt) : NaN
@@ -116,6 +122,7 @@ const directoryContents = computed(() => {
   const folders = new Map<string, number>()
   const pages: Memory[] = []
   for (const memory of memories.value) {
+    if (hideSessions.value && isSessionMemory(memory)) continue
     if (!memory.path.startsWith(prefix)) continue
     const remainder = memory.path.slice(prefix.length)
     const slash = remainder.indexOf('/')
@@ -129,7 +136,7 @@ const directoryContents = computed(() => {
     pages: pages.sort(compareMemoriesByUpdatedAt),
   }
 })
-const filtered = computed(() => categoryMode.value ? directoryContents.value.pages : memories.value)
+const filtered = computed(() => categoryMode.value ? directoryContents.value.pages : memories.value.filter(memory => !hideSessions.value || !isSessionMemory(memory)))
 const visibleMemoryPaths = computed(() => filtered.value.map(memory => memory.path))
 const selectedVisibleMemoryCount = computed(() => selectedMemoryPaths.value.filter(path => visibleMemoryPaths.value.includes(path)).length)
 const allVisibleMemoriesSelected = computed(() => visibleMemoryPaths.value.length > 0 && visibleMemoryPaths.value.every(path => selectedMemoryPaths.value.includes(path)))
@@ -144,14 +151,21 @@ function toggleVisibleMemorySelection(checked: boolean) {
     : selectedMemoryPaths.value.filter(path => !visibleMemoryPaths.value.includes(path))
 }
 function memorySessionBadge(memory: Memory) {
-  const isSession = memory.kind.toLowerCase() === 'session' || /^sessions\//i.test(memory.path)
-  if (!isSession) return ''
+  if (!isSessionMemory(memory)) return ''
   const metadataSessionId = memory.frontmatter?.session_id
   const pathSessionId = memory.path.match(/(?:^|\/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/i)?.[1]
   const sessionId = typeof metadataSessionId === 'string' ? metadataSessionId : pathSessionId
   const session = sessionId ? sessionIndex.value.find(item => item.session_id === sessionId) : undefined
   if (session?.consolidation?.state === 'completed') return 'Sessão consolidada'
   return sessionId ? 'Não consolidada · Sessão' : 'Sessão'
+}
+
+function toggleHideSessions(checked: boolean) {
+  hideSessions.value = checked
+  if (checked && selected.value && isSessionMemory(selected.value)) {
+    selectedPage.value = null
+    selectedPath.value = memories.value.find(memory => !isSessionMemory(memory))?.path || ''
+  }
 }
 
 async function loadSessionIndex() {
@@ -1125,7 +1139,8 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
               <button class="view-mode" :class="{ active: !categoryMode }" @click="categoryMode = false; currentDirectory = ''; selectedMemoryPaths = []">Todas</button>
               <button class="view-mode" :class="{ active: categoryMode }" @click="categoryMode = true; currentDirectory = ''; selectedMemoryPaths = []">Categorias</button>
               <span v-if="loading && memories.length === 0" class="skeleton skeleton-caption" aria-label="Carregando total"></span>
-              <span v-else>{{ categoryMode ? `${filtered.length} memórias` : `${memories.length} resultados` }}</span>
+              <span v-else>{{ categoryMode ? `${filtered.length} memórias` : `${filtered.length} resultados` }}</span>
+              <label class="memory-select-visible hide-sessions-control"><input type="checkbox" :checked="hideSessions" aria-label="Ocultar sessões" @change="toggleHideSessions(($event.target as HTMLInputElement).checked)"> Ocultar sessões</label>
               <label v-if="canAdmin" class="memory-select-visible"><input type="checkbox" :checked="allVisibleMemoriesSelected" :disabled="visibleMemoryPaths.length === 0" aria-label="Selecionar todas as memórias visíveis" @change="toggleVisibleMemorySelection(($event.target as HTMLInputElement).checked)"> Selecionar visíveis</label>
             </div>
             <div class="memory-toolbar-actions">
@@ -1157,7 +1172,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
                   <input v-if="canAdmin" type="checkbox" :checked="selectedMemoryPaths.includes(memory.path)" :aria-label="`Selecionar ${memory.title}`" @change="toggleMemorySelection(memory.path, ($event.target as HTMLInputElement).checked)">
                   <button class="memory-row" :class="{ selected: selectedPath === memory.path }" @click="selectedPath = memory.path">
                     <i class="kind-badge" :class="memory.kind.toLowerCase()">{{ memory.kind[0] }}</i>
-                    <span class="memory-copy"><strong>{{ memory.title }} <em v-if="memory.pinned">⌖</em></strong><small>{{ memory.summary }}</small><span class="tag-row"><b v-for="tag in memory.tags" :key="tag">{{ tag }}</b><b v-if="memorySessionBadge(memory)" class="session-memory-badge">{{ memorySessionBadge(memory) }}</b></span></span>
+                    <span class="memory-copy"><strong>{{ memory.title }} <em v-if="memory.pinned">⌖</em></strong><small>{{ memory.path }}</small><span class="tag-row"><b v-for="tag in memory.tags" :key="tag">{{ tag }}</b><b v-if="memorySessionBadge(memory)" class="session-memory-badge">{{ memorySessionBadge(memory) }}</b></span></span>
                     <time>{{ memory.updated }}</time>
                   </button>
                 </div>
