@@ -11,7 +11,9 @@ const error = ref('')
 const created = ref(false)
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
 function applyTheme() {
-  document.documentElement.dataset.theme = systemTheme.matches ? 'dark' : 'light'
+  const theme = systemTheme.matches ? 'dark' : 'light'
+  document.documentElement.dataset.theme = theme
+  document.documentElement.style.colorScheme = theme
 }
 function onSystemThemeChange() { applyTheme() }
 systemTheme.addEventListener('change', onSystemThemeChange)

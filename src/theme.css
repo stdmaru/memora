@@ -6,3 +6,53 @@
 :root[data-theme='light'] {
   color-scheme: light;
 }
+
+:root[data-theme='dark'] .setup-screen {
+  background: radial-gradient(ellipse at 50% 0%, #302c4a 0, transparent 50%), #19181f;
+  color: #eeeaf1;
+}
+
+:root[data-theme='dark'] .setup-card {
+  border-color: #393642;
+  background: #24222b;
+  box-shadow: 0 22px 70px #0004;
+}
+
+:root[data-theme='dark'] .setup-brand,
+:root[data-theme='dark'] .setup-card h1 {
+  color: #eeeaf1;
+}
+
+:root[data-theme='dark'] .setup-copy,
+:root[data-theme='dark'] .setup-form label {
+  color: #c1bbc8;
+}
+
+:root[data-theme='dark'] .setup-form input {
+  border-color: #484452;
+  background: #1e1c24;
+  color: #f0ecf2;
+}
+
+:root[data-theme='dark'] .setup-form input::placeholder {
+  color: #8e8896;
+}
+
+:root[data-theme='dark'] .setup-account {
+  border-color: #3a3743;
+  background: #2b2933;
+}
+
+:root[data-theme='dark'] .setup-account strong {
+  color: #eeeaf1;
+}
+
+:root[data-theme='dark'] .setup-account small,
+:root[data-theme='dark'] .setup-security {
+  color: #aaa3b1;
+}
+
+:root[data-theme='dark'] .setup-warning {
+  border-color: #423842;
+  color: #e6a18a;
+}
