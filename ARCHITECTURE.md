@@ -1,23 +1,54 @@
-# Arquitetura inicial
+# Arquitetura do projeto
 
 ## Objetivo
 
-O `ai-memory-manager` será uma interface humana para explorar, criar, editar,
+O `ai-memory-manager` é uma interface humana para explorar, criar, editar,
 relacionar, reorganizar e remover memórias persistentes compartilhadas entre IAs.
 
-## Decisão inicial
+## Organização do código
 
-- **Frontend:** Vue 3, TypeScript e Vite.
-- **Integração:** o frontend chama a API local do painel. Ela mantém a chave no
-  servidor, usa a API REST `/api/v1` do [ai-memory](https://github.com/akitaonrails/ai-memory)
-  para navegação/leitura, e usará MCP para operações de escrita com escopo
-  validado. O servidor ai-memory precisa habilitar `--enable-web` (isso também
-  monta `/api/v1`).
-- **Publicação remota:** VPN reduz a exposição de rede, mas não substitui login
-  nem controle de permissões.
+O frontend usa Vue 3, TypeScript e Vite. A estrutura separa o shell da
+aplicação, telas por funcionalidade, contratos compartilhados, acesso HTTP e
+estilos:
 
-Nuxt continua uma opção se o projeto passar a exigir SSR, rotas de servidor ou
-sessões no mesmo deploy; não precisamos assumir essa complexidade agora.
+```text
+src/
+  App.vue                 Shell, autenticação, escopo e estado compartilhado
+  components/             Componentes reutilizáveis e telas de entrada
+  features/
+    memories/             Biblioteca, categorias e detalhes de memórias
+    overview/             Visão geral
+    projects/             Navegação e administração de projetos
+    relations/            Relações entre memórias
+    sessions/             Sessões e observações
+    trash/                Restauração de memórias
+  services/               Acesso à API local do painel
+  styles/                 Estilos globais e estilos organizados por área
+  types/                  Tipos compartilhados do domínio
+```
+
+`App.vue` coordena autenticação, seleção de escopo, carregamento e mutações
+compartilhadas. As telas de funcionalidade recebem os dados necessários por
+props e comunicam intenções ao shell por eventos; não fazem chamadas diretas à
+API. Tipos usados por mais de uma área ficam em `types/domain.ts`. A integração
+HTTP do browser passa por `services/manager-api.ts`.
+
+Essa divisão é intencionalmente direta: não há camada de estado global nem
+abstrações adicionais enquanto o estado compartilhado puder ser coordenado
+com clareza pelo shell.
+
+## Integração e implantação
+
+- O frontend chama a API local do painel. Ela mantém a chave no servidor e usa
+  a API REST `/api/v1` do [ai-memory](https://github.com/akitaonrails/ai-memory)
+  para navegação/leitura. O servidor ai-memory precisa habilitar `--enable-web`
+  (isso também monta `/api/v1`).
+- A API local do painel encaminha operações de escrita e administração com
+  escopo validado.
+- VPN reduz a exposição de rede, mas não substitui login nem controle de
+  permissões.
+- Nuxt continua uma opção se o projeto passar a exigir SSR, rotas de servidor
+  ou sessões no mesmo deploy; não precisamos assumir essa complexidade agora.
 
 ## Banco local do painel
 

@@ -2,28 +2,33 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import LoginView from './components/LoginView.vue'
 import SetupView from './components/SetupView.vue'
-
-type Theme = 'light' | 'dark' | 'system'
-type AuthUser = { id: string; name: string; email: string; role: 'admin'; theme: Theme }
-type PageLink = { path: string; title?: string; kind?: string }
-type RelationEntry = { source: Memory; targetPath: string; targetTitle: string; kind: string }
-type Memory = { path: string; title: string; summary: string; kind: string; updated: string; updatedAt?: string; tags: string[]; pinned: boolean; bodyMarkdown?: string; tier?: string; frontmatter?: Record<string, unknown>; links?: PageLink[]; backlinks?: PageLink[] }
-type PageSummary = { path: string; title: string; kind?: string; tier?: string; updated_at?: string; snippet?: string; frontmatter?: Record<string, unknown> }
-type WorkspaceSummary = { workspace_name: string; project_count: number; page_count: number; last_updated: string | null }
-type ProjectSummary = { workspace_name: string; project_name: string; project_id: string; page_count: number; last_updated: string | null }
-type TrashEntry = { workspace: string; project: string; path: string; deleted_at: string | null; restore_rev: string | null }
-type ScopeResponse = { workspaces: WorkspaceSummary[]; projects: ProjectSummary[]; preferred: { workspace: string; project: string }; canAdmin: boolean }
-type Session = { session_id: string; cwd?: string; agent_kind?: string; started_at: string; ended_at?: string | null; observation_count: number; consolidation?: { state: string; attempts: number } | null }
-type Observation = { id: string; kind: string; title?: string; body?: string; importance?: number; created_at: string }
-type SessionDetail = { session: Session; observations: Observation[]; total: number; offset: number; elided_other_scope: number }
-type BulkDeleteDialog = { kind: 'memories' | 'category'; label: string; workspace: string; project: string; paths: string[]; completed: number; busy: boolean; error: string; failures: string[] }
-type CategoryCreateDialog = { name: string; busy: boolean; error: string }
-type OverviewActivity = { days: number; sessions: number; observations: number; pages_updated: number }
-type OverviewResponse = {
-  handoff: { agent?: string; at?: string; project?: string; summary?: string; open_questions?: string[]; next_steps?: string[] } | null
-  briefing: { counts: { pages_latest?: number; pages_all?: number; sessions?: number; observations?: number }; activity_7d?: OverviewActivity; activity_30d?: OverviewActivity; last_observation_at?: string | null; pending_handoff_count?: number; recent_pages?: PageSummary[]; rules?: PageSummary[]; slots?: PageSummary[] }
-  health: { stale?: number; duplicates?: number; contradictions?: number; orphans?: number; audited_at?: string | null }
-}
+import OverviewSection from './features/overview/OverviewSection.vue'
+import MemoryLibrary from './features/memories/MemoryLibrary.vue'
+import SessionsSection from './features/sessions/SessionsSection.vue'
+import ProjectsSection from './features/projects/ProjectsSection.vue'
+import TrashSection from './features/trash/TrashSection.vue'
+import RelationsSection from './features/relations/RelationsSection.vue'
+import { requestManagerApi } from './services/manager-api'
+import type {
+  AuthUser,
+  BulkDeleteDialog,
+  CategoryCreateDialog,
+  Memory,
+  Observation,
+  OverviewResponse,
+  PageLink,
+  PageSummary,
+  ProjectSummary,
+  RelationEntry,
+  ScopeCreateDialog,
+  ScopeDialog,
+  ScopeResponse,
+  Session,
+  SessionDetail,
+  Theme,
+  TrashEntry,
+  WorkspaceSummary,
+} from './types/domain'
 
 const sections = ['Visão geral', 'Memórias', 'Sessões', 'Relações', 'Projetos', 'Lixeira']
 const setupChecked = ref(false)
@@ -65,9 +70,7 @@ const selectedMemoryPaths = ref<string[]>([])
 const memoryActionNotice = ref('')
 const hideSessions = ref(false)
 const canAdmin = ref(false)
-type ScopeDialog = { action: 'rename' | 'delete'; kind: 'project' | 'workspace'; current: string; value: string; step: 'form' | 'preview' | 'confirm'; preview: Record<string, unknown> | null; error: string; busy: boolean }
 const scopeDialog = ref<ScopeDialog | null>(null)
-type ScopeCreateDialog = { kind: 'project' | 'workspace'; workspace: string; project: string; path: string; title: string; body: string; error: string; busy: boolean }
 const scopeCreateDialog = ref<ScopeCreateDialog | null>(null)
 const pageEditorOpen = ref(false)
 const pageEditorBody = ref('')
@@ -233,14 +236,12 @@ const relationEntries = computed<RelationEntry[]>(() => {
 const directoryBreadcrumbs = computed(() => currentDirectory.value ? currentDirectory.value.split('/') : [])
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api/manager/${path}`, options)
-  const payload = await response.json()
-  if (response.status === 401 && currentUser.value) {
-    currentUser.value = null
-    authError.value = 'Sua sessão expirou. Entre novamente.'
-  }
-  if (!response.ok) throw new Error(payload.error || `Erro HTTP ${response.status}`)
-  return payload as T
+  return requestManagerApi(path, options, () => {
+    if (currentUser.value) {
+      currentUser.value = null
+      authError.value = 'Sua sessão expirou. Entre novamente.'
+    }
+  })
 }
 
 function scopeQuery() {
@@ -1093,104 +1094,97 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       <div v-if="themeError" class="api-error" role="alert"><strong>Não foi possível salvar a aparência.</strong><span>{{ themeError }}</span></div>
       <div v-if="apiError && activeSection !== 'Visão geral'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
       <div v-if="activeSection !== 'Visão geral'" class="overview-cards"><article><i class="violet">◫</i><div><strong v-if="scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading)" class="skeleton skeleton-value" aria-label="Carregando total"></strong><strong v-else>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading) ? 'Carregando…' : 'escopo selecionado' }}</small></article><article><i class="orange">⌘</i><div><strong v-if="scopesLoading" class="skeleton skeleton-value" aria-label="Carregando projeto"></strong><strong v-else>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ scopesLoading ? 'Carregando…' : selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
-      <div v-if="activeSection === 'Visão geral'" class="overview-page">
-        <div v-if="overviewError" class="api-error"><strong>Não foi possível carregar o resumo do projeto.</strong><span>{{ overviewError }}</span></div>
-        <div v-else-if="overviewLoading" class="overview-skeleton" role="status" aria-label="Carregando visão geral"><div class="overview-metrics"><article v-for="index in 4" :key="index" class="skeleton-card"><span class="skeleton skeleton-icon"></span><span class="skeleton skeleton-metric"></span><span class="skeleton skeleton-caption"></span></article></div><div class="overview-grid"><div class="overview-main"><section class="overview-panel skeleton-panel"><span class="skeleton skeleton-heading"></span><span v-for="index in 3" :key="index" class="skeleton skeleton-line"></span></section><section class="overview-panel skeleton-panel"><span class="skeleton skeleton-heading"></span><span v-for="index in 3" :key="index" class="skeleton skeleton-row"></span></section></div><aside class="overview-side"><section class="overview-panel skeleton-panel"><span class="skeleton skeleton-heading"></span><span v-for="index in 4" :key="index" class="skeleton skeleton-line"></span></section></aside></div></div>
-        <template v-else-if="overview">
-          <div class="overview-metrics"><article><span class="metric-icon purple">▤</span><div><strong>{{ overview.briefing.counts.pages_latest ?? 0 }}</strong><small>memórias atuais</small></div></article><article><span class="metric-icon coral">◷</span><div><strong>{{ overview.briefing.counts.sessions ?? 0 }}</strong><small>sessões registradas</small></div></article><article><span class="metric-icon green">≋</span><div><strong>{{ overview.briefing.counts.observations ?? 0 }}</strong><small>observações capturadas</small></div></article><article><span class="metric-icon amber">↗</span><div><strong>{{ overview.briefing.pending_handoff_count ?? 0 }}</strong><small>handoffs abertos</small></div></article></div>
-          <div class="overview-grid"><div class="overview-main">
-            <section class="overview-panel"><header><div><span class="panel-kicker">Últimos 7 dias</span><h2>Atividade recente</h2></div><span class="activity-total">{{ overview.briefing.activity_7d?.sessions ?? 0 }} sessões</span></header><div class="activity-stats"><div><strong>{{ overview.briefing.activity_7d?.observations ?? 0 }}</strong><span>observações</span></div><div><strong>{{ overview.briefing.activity_7d?.pages_updated ?? 0 }}</strong><span>memórias atualizadas</span></div><div><strong>{{ overview.briefing.activity_30d?.sessions ?? 0 }}</strong><span>sessões em 30 dias</span></div></div><div class="activity-comparison"><span>30 dias</span><div><i :style="{ width: `${Math.min(100, ((overview.briefing.activity_7d?.observations || 0) / Math.max(1, overview.briefing.activity_30d?.observations || 0)) * 100)}%` }"></i></div><strong>{{ overview.briefing.activity_30d?.observations ?? 0 }} observações</strong></div></section>
-            <section class="overview-panel"><header><div><span class="panel-kicker">Conteúdo</span><h2>Memórias recentes</h2></div><button class="panel-link" @click="activeSection = 'Memórias'">Ver todas →</button></header><div class="recent-pages"><section v-for="group in overviewPageDateGroups" :key="group.label" class="memory-date-group"><h3>{{ group.label }}</h3><button v-for="page in group.items" :key="page.path" @click="openOverviewPage(page.path)"><i class="kind-badge" :class="(page.kind || 'fact').toLowerCase()">{{ (page.kind || 'M')[0] }}</i><span><strong>{{ page.title || page.path }}</strong><small>{{ page.path }}</small></span><time>{{ formatDate(page.updated_at) }}</time></button></section><p v-if="!overview.briefing.recent_pages?.length" class="empty-state">Ainda não há memórias neste projeto.</p></div></section>
-          </div><aside class="overview-side">
-            <section class="overview-panel health-panel"><header><div><span class="panel-kicker">Qualidade</span><h2>Saúde da memória</h2></div><span class="health-dot"></span></header><div class="health-list"><div><span>Memórias desatualizadas</span><strong>{{ overview.health.stale ?? 0 }}</strong></div><div><span>Possíveis duplicatas</span><strong>{{ overview.health.duplicates ?? 0 }}</strong></div><div><span>Contradições</span><strong>{{ overview.health.contradictions ?? 0 }}</strong></div><div><span>Memórias órfãs</span><strong>{{ overview.health.orphans ?? 0 }}</strong></div></div><small v-if="overview.health.audited_at" class="health-audit">Auditoria {{ formatDate(overview.health.audited_at) }}</small></section>
-            <section v-if="overview.handoff" class="overview-panel handoff-panel"><header><div><span class="panel-kicker">Continuidade</span><h2>Handoff aberto</h2></div><span class="handoff-mark">↗</span></header><p>{{ overview.handoff.summary || 'Há contexto aguardando a próxima sessão.' }}</p><small>{{ overview.handoff.agent || 'Agente' }} · {{ formatDate(overview.handoff.at) }}</small><ul v-if="overview.handoff.next_steps?.length"><li v-for="step in overview.handoff.next_steps.slice(0, 3)" :key="step">{{ step }}</li></ul></section>
-            <section class="overview-panel rules-panel"><header><div><span class="panel-kicker">Referência</span><h2>Regras do projeto</h2></div></header><button v-for="rule in overview.briefing.rules || []" :key="rule.path" @click="openOverviewPage(rule.path)"><span>◇</span><strong>{{ rule.title || rule.path }}</strong></button><p v-if="!overview.briefing.rules?.length" class="subtle-empty">Nenhuma regra registrada.</p></section>
-          </aside></div>
-        </template>
-      </div>
-      <div v-else-if="activeSection === 'Projetos'" class="projects-page">
-        <header class="projects-intro"><div><span class="panel-kicker">Escopos disponíveis</span><h2 v-if="scopesLoading" class="skeleton skeleton-project-title" aria-label="Carregando projetos"></h2><h2 v-else>{{ projects.length }} projetos em {{ workspaces.length }} workspaces</h2><p>Escolha um projeto para abrir sua visão geral. Renomeação e exclusão ficam disponíveis para quem tem acesso administrativo.</p></div><span v-if="scopesLoading" class="skeleton skeleton-label" aria-label="Carregando memórias"></span><span v-else class="projects-total">{{ projects.reduce((total, project) => total + project.page_count, 0) }} memórias</span></header>
-        <div v-if="scopesLoading" class="project-grid skeleton-project-grid" role="status" aria-label="Carregando projetos"><article v-for="index in 4" :key="index" class="project-card skeleton-project-card"><span class="skeleton skeleton-icon"></span><span class="skeleton skeleton-row"></span><span class="skeleton skeleton-line"></span></article></div>
-        <section v-else v-for="workspace in projectsByWorkspace" :key="workspace.workspace_name" class="project-workspace"><header><div><span class="workspace-dot"></span><h3>{{ workspace.workspace_name }}</h3></div><span>{{ workspace.project_count }} {{ workspace.project_count === 1 ? 'projeto' : 'projetos' }} · {{ workspace.page_count }} memórias</span></header><div v-if="workspace.projects.length" class="project-grid"><article v-for="project in workspace.projects" :key="project.project_id" class="project-card" :class="{ current: selectedWorkspace === project.workspace_name && selectedProject === project.project_name }"><button class="project-open" @click="openProject(project)"><span class="project-folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17zM3.5 7.5v-2h6l2 2"/></svg></span><span class="project-card-copy"><strong>{{ project.project_name }}</strong><small>{{ project.page_count }} {{ project.page_count === 1 ? 'memória' : 'memórias' }}</small><small>Atualizado {{ formatDate(project.last_updated) }}</small></span><b class="project-chevron">›</b></button><div v-if="canAdmin" class="project-actions"><button title="Renomear projeto" @click="selectedWorkspace = project.workspace_name; selectedProject = project.project_name; manageScope('rename', 'project')">Renomear</button><button class="danger" title="Excluir projeto" @click="selectedWorkspace = project.workspace_name; selectedProject = project.project_name; manageScope('delete', 'project')">Excluir</button></div></article></div><p v-else class="subtle-empty">Este workspace ainda não tem projetos.</p></section>
-      </div>
-      <div v-else-if="activeSection === 'Lixeira'" class="trash-page">
-        <header class="trash-intro"><div><span class="panel-kicker">Recuperação</span><h2>Lixeira de memórias</h2><p>Exclusões recentes registradas nos checkpoints Git do ai-memory. A consulta cobre até os 100 checkpoints mais recentes e não é uma lixeira permanente.</p></div><button class="panel-link" :disabled="trashLoading" @click="loadTrash">{{ trashLoading ? 'Atualizando…' : 'Atualizar' }}</button></header>
-        <p class="trash-retention-note">A API atual permite restaurar itens, mas não apagar checkpoints individuais nem esvaziar o histórico. A exclusão permanente ficará indisponível até o serviço oferecer suporte.</p>
-        <p v-if="trashError" class="api-error"><strong>Não foi possível abrir a lixeira.</strong><span>{{ trashError }}</span></p><p v-if="trashMessage" class="trash-success" role="status">{{ trashMessage }}</p>
-        <div v-if="trashLoading" class="trash-list skeleton-trash-list" role="status" aria-label="Carregando lixeira"><article v-for="index in 3" :key="index" class="trash-card skeleton-trash-card"><span class="skeleton skeleton-icon"></span><div class="trash-copy"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-caption"></span></div><span class="skeleton skeleton-button"></span></article></div>
-        <div v-else-if="trashEntries.length" class="trash-list"><article v-for="entry in trashEntries" :key="`${entry.workspace}/${entry.project}:${entry.path}`" class="trash-card"><span class="trash-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></span><div class="trash-copy"><strong>{{ entry.path }}</strong><small>{{ entry.workspace }} / {{ entry.project }}</small><time>Removida {{ formatDate(entry.deleted_at) }}</time></div><button class="dialog-primary" :disabled="!entry.restore_rev" :title="entry.restore_rev ? 'Restaurar do checkpoint anterior à exclusão' : 'Checkpoint anterior não encontrado entre os 100 mais recentes'" @click="restoreDialog = { entry, busy: false, error: '' }">Restaurar</button></article></div>
-        <div v-else-if="!trashError" class="relations-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><h3>A lixeira está vazia</h3><p>Não foram encontradas exclusões nos checkpoints recentes. As memórias apagadas não são removidas daqui automaticamente se a exclusão não gerou um checkpoint.</p></div>
-      </div>
-      <div v-else-if="activeSection === 'Relações'" class="relations-page">
-        <header class="relations-heading"><div><span class="panel-kicker">Mapa do projeto</span><h2><span v-if="relationLoading" class="skeleton skeleton-heading" aria-label="Carregando conexões"></span><template v-else>{{ relationEntries.length }} conexões encontradas</template></h2><p>Relações tipadas e links Markdown entre as memórias deste escopo.</p></div><button class="panel-link" @click="activeSection = 'Memórias'">Abrir memórias →</button></header>
-        <div v-if="relationLoading" class="relation-list skeleton-relation-list" role="status" aria-label="Carregando relações"><article v-for="index in 3" :key="index" class="relation-card skeleton-relation-card"><span class="skeleton skeleton-row"></span><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-row"></span></article></div>
-        <div v-else-if="relationError" class="api-error"><strong>Não foi possível carregar as relações.</strong><span>{{ relationError }}</span></div>
-        <div v-else-if="relationEntries.length" class="relation-list"><article v-for="(entry, index) in relationEntries" :key="`${entry.source.path}-${entry.kind}-${entry.targetPath}-${index}`" class="relation-card"><button class="relation-node" @click="openOverviewPage(entry.source.path)"><i class="kind-badge" :class="entry.source.kind.toLowerCase()">{{ entry.source.kind[0] }}</i><span><strong>{{ entry.source.title }}</strong><small>{{ entry.source.path }}</small></span></button><div class="relation-edge"><span>{{ entry.kind === 'causes' ? 'Causa' : entry.kind === 'fixes' ? 'Resolve' : entry.kind === 'contradicts' ? 'Contradiz' : 'Link Markdown' }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></div><button class="relation-node" @click="openOverviewPage(entry.targetPath)"><i class="kind-badge" :class="(memories.find(page => page.path === entry.targetPath)?.kind || 'fact').toLowerCase()">{{ (memories.find(page => page.path === entry.targetPath)?.kind || 'M')[0] }}</i><span><strong>{{ entry.targetTitle }}</strong><small>{{ entry.targetPath }}</small></span></button></article></div>
-        <div v-else class="relations-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></svg><h3>Nenhuma relação encontrada</h3><p>Adicione conexões tipadas em uma memória ou inclua links Markdown entre páginas. Elas aparecerão aqui para exploração.</p><button class="dialog-primary" @click="activeSection = 'Memórias'">Ir para Memórias</button></div>
-      </div>
-      <div v-else-if="activeSection === 'Sessões'" class="sessions-layout">
-        <section class="session-list"><div class="list-toolbar"><div><strong>Sessões capturadas</strong><span v-if="sessionsLoading && sessions.length === 0" class="skeleton skeleton-caption" aria-label="Carregando sessões"></span><span v-else>{{ sessions.length }} resultados</span></div></div><div class="session-rows"><div v-if="sessionsLoading && sessions.length === 0" class="session-skeletons" role="status" aria-label="Carregando sessões"><div v-for="index in 5" :key="index" class="session-skeleton"><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-row"></span><span class="skeleton skeleton-line"></span></div></div><template v-else><section v-for="group in sessionDateGroups" :key="group.label" class="memory-date-group"><h3>{{ group.label }}</h3><button v-for="session in group.items" :key="session.session_id" class="session-row" :class="{ selected: selectedSession?.session_id === session.session_id }" @click="loadSessionObservations(session)"><span class="session-agent">{{ session.agent_kind || 'Agente' }}</span><strong>{{ formatDate(session.started_at) }}</strong><small>{{ session.cwd || 'Diretório não informado' }}</small><span class="session-count">{{ session.observation_count }} observações</span></button></section><p v-if="sessions.length === 0 && !apiError" class="empty-state">Nenhuma sessão visível neste projeto.</p></template></div></section>
-        <section class="session-detail"><template v-if="selectedSession"><header><span class="session-agent">{{ selectedSession.agent_kind || 'Agente' }}</span><h2>{{ formatDate(selectedSession.started_at) }}</h2><p>{{ selectedSession.cwd || 'Diretório não informado' }}</p><div class="session-meta"><span>{{ selectedSession.ended_at ? `Encerrada ${formatDate(selectedSession.ended_at)}` : 'Sessão em andamento' }}</span><span v-if="observationLoading && sessionTotal === 0" class="skeleton skeleton-caption" aria-label="Carregando total"></span><span v-else>{{ sessionTotal }} observações</span><span v-if="selectedSession.consolidation">Consolidação: {{ selectedSession.consolidation.state }}</span></div></header><div class="observation-list"><div v-if="observationLoading && observations.length === 0" class="observation-skeletons" role="status" aria-label="Carregando observações"><article v-for="index in 3" :key="index" class="observation-card skeleton-observation"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-line"></span></article></div><template v-else><article v-for="observation in observations" :key="observation.id" class="observation-card"><div><strong>{{ observation.title || observation.kind }}</strong><time>{{ formatDate(observation.created_at) }}</time></div><pre>{{ observation.body || 'Sem conteúdo registrado.' }}</pre></article><div v-if="observationLoading" class="observation-skeletons" role="status" aria-label="Carregando mais observações"><article v-for="index in 2" :key="index" class="observation-card skeleton-observation"><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-line"></span></article></div><p v-if="!observationLoading && observations.length === 0 && !apiError" class="empty-state">Esta sessão não possui observações visíveis no projeto.</p><button v-if="observations.length < sessionTotal" class="load-more" :disabled="observationLoading" @click="loadSessionObservations(selectedSession!, observations.length)">Carregar mais observações</button></template></div></template><div v-else-if="sessionsLoading" class="session-detail-skeleton" role="status" aria-label="Carregando sessão"><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-heading"></span><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-caption"></span><span v-for="index in 3" :key="index" class="skeleton skeleton-row"></span></div><p v-else class="empty-state">Selecione uma sessão para revisar as observações.</p></section>
-      </div>
-      <div v-else class="workspace">
-        <section class="memory-list">
-          <div class="list-toolbar">
-            <div class="list-view-controls">
-              <button class="view-mode" :class="{ active: !categoryMode }" @click="categoryMode = false; currentDirectory = ''; selectedMemoryPaths = []">Todas</button>
-              <button class="view-mode" :class="{ active: categoryMode }" @click="categoryMode = true; currentDirectory = ''; selectedMemoryPaths = []">Categorias</button>
-              <span v-if="loading && memories.length === 0" class="skeleton skeleton-caption" aria-label="Carregando total"></span>
-              <span v-else>{{ categoryMode ? `${filtered.length} memórias` : `${filtered.length} resultados` }}</span>
-              <label class="memory-select-visible hide-sessions-control"><input type="checkbox" :checked="hideSessions" aria-label="Ocultar sessões" @change="toggleHideSessions(($event.target as HTMLInputElement).checked)"> Ocultar sessões</label>
-              <label v-if="canAdmin" class="memory-select-visible"><input type="checkbox" :checked="allVisibleMemoriesSelected" :disabled="visibleMemoryPaths.length === 0" aria-label="Selecionar todas as memórias visíveis" @change="toggleVisibleMemorySelection(($event.target as HTMLInputElement).checked)"> Selecionar visíveis</label>
-            </div>
-            <div class="memory-toolbar-actions">
-              <button v-if="selectedVisibleMemoryCount" class="memory-bulk-delete" @click="openSelectedMemoriesDeleteDialog">Excluir selecionadas ({{ selectedVisibleMemoryCount }})</button>
-              <button v-if="categoryMode && canAdmin" class="memory-add-category" @click="openCategoryCreateDialog">+ Categoria</button>
-              <button v-if="!categoryMode" class="sort-label">Atualizadas recentemente ↓</button>
-              <div v-else class="folder-breadcrumb">
-                <button @click="currentDirectory = ''; selectedMemoryPaths = []">Todas as categorias</button>
-                <template v-for="(part, index) in directoryBreadcrumbs" :key="`${part}-${index}`"><span>/</span><button :class="{ current: index === directoryBreadcrumbs.length - 1 }" @click="currentDirectory = directoryBreadcrumbs.slice(0, index + 1).join('/'); selectedMemoryPaths = []">{{ part }}</button></template>
-              </div>
-            </div>
-          </div>
-          <p v-if="sessionIndexError" class="session-index-notice" role="status">Não foi possível consultar o estado de consolidação das sessões: {{ sessionIndexError }}</p>
-          <div v-if="categoryMode && directoryContents.folders.length" class="folder-grid">
-            <article v-for="folder in directoryContents.folders" :key="folder.path" class="folder-card-wrapper">
-              <button class="folder-card" @click="currentDirectory = folder.path; selectedMemoryPaths = []">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17zM3.5 7.5v-2h6l2 2"/></svg>
-                <span><strong>{{ folder.name }}</strong><small>{{ folder.count }} {{ folder.count === 1 ? 'memória' : 'memórias' }}</small></span><b>›</b>
-              </button>
-              <button v-if="canAdmin" class="category-delete" :disabled="loading" :aria-label="`Excluir categoria ${folder.path}`" @click="openCategoryDeleteDialog(folder.path)">Excluir categoria</button>
-            </article>
-          </div>
-          <div class="memory-rows">
-            <div v-if="loading && memories.length === 0" class="memory-skeletons" role="status" aria-label="Carregando memórias"><div v-for="index in 6" :key="index" class="memory-skeleton"><span class="skeleton skeleton-icon"></span><span class="skeleton skeleton-row"></span><span class="skeleton skeleton-line"></span><span class="skeleton skeleton-caption"></span></div></div>
-            <template v-else>
-              <section v-for="group in memoryDateGroups" :key="group.label" class="memory-date-group">
-                <h3>{{ group.label }}</h3>
-                <div v-for="memory in group.items" :key="memory.path" class="memory-row-item">
-                  <input v-if="canAdmin" type="checkbox" :checked="selectedMemoryPaths.includes(memory.path)" :aria-label="`Selecionar ${memory.title}`" @change="toggleMemorySelection(memory.path, ($event.target as HTMLInputElement).checked)">
-                  <button class="memory-row" :class="{ selected: selectedPath === memory.path }" @click="selectedPath = memory.path">
-                    <i class="kind-badge" :class="memory.kind.toLowerCase()">{{ memory.kind[0] }}</i>
-                    <span class="memory-copy"><strong>{{ memory.title }} <em v-if="memory.pinned">⌖</em></strong><small>{{ memory.path }}</small><span class="tag-row"><b v-for="tag in memory.tags" :key="tag">{{ tag }}</b><b v-if="memorySessionBadge(memory)" class="session-memory-badge">{{ memorySessionBadge(memory) }}</b></span></span>
-                    <time>{{ memory.updated }}</time>
-                  </button>
-                </div>
-              </section>
-              <p v-if="filtered.length === 0 && directoryContents.folders.length === 0 && !apiError && !loading" class="empty-state">{{ categoryMode ? 'Esta categoria não contém memórias.' : 'Nenhuma memória encontrada.' }}</p>
-            </template>
-          </div>
-        </section>
-        <aside v-if="(selected && detailLoading) || (loading && !selected)" class="detail-panel detail-skeleton" role="status" aria-label="Carregando detalhe da memória"><div class="detail-actions"><span class="skeleton skeleton-caption"></span></div><span class="skeleton skeleton-heading"></span><span class="skeleton skeleton-line"></span><span v-for="index in 7" :key="index" class="skeleton skeleton-line"></span><span class="skeleton skeleton-caption"></span><div class="detail-skeleton-footer"><span v-for="index in 3" :key="index" class="skeleton skeleton-button"></span></div></aside>
-        <aside v-else-if="selected" class="detail-panel">
-          <div class="detail-actions"><span class="status-chip">● Página</span><button>···</button></div>
-          <span class="detail-type">{{ selected.kind }}</span><span v-if="memorySessionBadge(selected)" class="session-memory-badge detail-session-badge">{{ memorySessionBadge(selected) }}</span>
-          <h2>{{ selected.title }}</h2><p class="detail-path">{{ selected.path }}</p><pre class="markdown-body">{{ selectedPage?.bodyMarkdown || selected.summary }}</pre>
-          <div class="detail-section"><h3>Etiquetas</h3><span class="tag-row detail-tags"><b v-for="tag in selected.tags" :key="tag"># {{ tag }}</b><span v-if="selected.tags.length === 0">Sem etiquetas</span></span></div>
-          <div class="detail-section metadata"><h3>Informações</h3><p><span>Atualizada</span><strong>{{ selected.updated || '—' }}</strong></p><p><span>Origem</span><strong>ai-memory</strong></p></div>
-          <div class="detail-footer"><button :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Editar Markdown' : 'Configure um bearer root para escrever'" @click="openPageEditor">Editar Markdown</button><button :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Gerenciar conexões' : 'Configure um bearer root para escrever'" @click="openConnections">Conexões</button><button class="danger" :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Mover para Lixeira' : 'Configure um bearer root para excluir'" @click="openPageDeleteDialog">Excluir</button></div>
-        </aside>
-      </div>
+      <OverviewSection
+        v-if="activeSection === 'Visão geral'"
+        :overview="overview"
+        :loading="overviewLoading"
+        :error="overviewError"
+        :page-groups="overviewPageDateGroups"
+        :format-date="formatDate"
+        @open-page="openOverviewPage"
+        @open-memories="activeSection = 'Memórias'"
+      />
+      <ProjectsSection
+        v-else-if="activeSection === 'Projetos'"
+        :projects="projects"
+        :workspaces="projectsByWorkspace"
+        :loading="scopesLoading"
+        :selected-workspace="selectedWorkspace"
+        :selected-project="selectedProject"
+        :can-admin="canAdmin"
+        :format-date="formatDate"
+        @open-project="openProject"
+        @manage-project="(action, project) => { selectedWorkspace = project.workspace_name; selectedProject = project.project_name; manageScope(action, 'project') }"
+      />
+      <TrashSection
+        v-else-if="activeSection === 'Lixeira'"
+        :entries="trashEntries"
+        :loading="trashLoading"
+        :error="trashError"
+        :message="trashMessage"
+        :format-date="formatDate"
+        @refresh="loadTrash"
+        @restore="entry => { restoreDialog = { entry, busy: false, error: '' } }"
+      />
+      <RelationsSection
+        v-else-if="activeSection === 'Relações'"
+        :entries="relationEntries"
+        :memories="memories"
+        :loading="relationLoading"
+        :error="relationError"
+        @open-page="openOverviewPage"
+        @open-memories="activeSection = 'Memórias'"
+      />
+      <SessionsSection
+        v-else-if="activeSection === 'Sessões'"
+        :sessions="sessions"
+        :groups="sessionDateGroups"
+        :loading="sessionsLoading"
+        :api-error="apiError"
+        :selected-session="selectedSession"
+        :observations="observations"
+        :observation-loading="observationLoading"
+        :session-total="sessionTotal"
+        :format-date="formatDate"
+        @select-session="loadSessionObservations"
+        @load-more="loadSessionObservations"
+      />
+      <MemoryLibrary
+        v-else
+        :memories="memories"
+        :filtered="filtered"
+        :groups="memoryDateGroups"
+        :folders="directoryContents.folders"
+        :visible-paths="visibleMemoryPaths"
+        :selected-paths="selectedMemoryPaths"
+        :selected-visible-count="selectedVisibleMemoryCount"
+        :all-visible-selected="allVisibleMemoriesSelected"
+        :category-mode="categoryMode"
+        :current-directory="currentDirectory"
+        :breadcrumbs="directoryBreadcrumbs"
+        :loading="loading"
+        :can-admin="canAdmin"
+        :hide-sessions="hideSessions"
+        :session-index-error="sessionIndexError"
+        :api-error="apiError"
+        :selected-path="selectedPath"
+        :selected="selected"
+        :selected-page="selectedPage"
+        :detail-loading="detailLoading"
+        :memory-session-badge="memorySessionBadge"
+        @set-category="categoryMode = $event; currentDirectory = ''; selectedMemoryPaths = []"
+        @set-directory="currentDirectory = $event; selectedMemoryPaths = []"
+        @toggle-hide-sessions="toggleHideSessions"
+        @toggle-memory-selection="toggleMemorySelection"
+        @toggle-visible-selection="toggleVisibleMemorySelection"
+        @bulk-delete="openSelectedMemoriesDeleteDialog"
+        @create-category="openCategoryCreateDialog"
+        @delete-category="openCategoryDeleteDialog"
+        @select-memory="selectedPath = $event"
+        @edit-page="openPageEditor"
+        @manage-connections="openConnections"
+        @delete-page="openPageDeleteDialog"
+      />
     </section>
     <div v-if="scopeDialog" class="dialog-backdrop" @click.self="closeScopeDialog" @keydown.esc="closeScopeDialog">
       <section class="scope-dialog" role="dialog" aria-modal="true" aria-labelledby="scope-dialog-title">

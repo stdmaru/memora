@@ -1,10 +1,10 @@
 import { createApp } from 'vue'
-import './style.css'
-import './theme.css'
-import './skeleton.css'
-import './scope-creation.css'
-import './memory-management.css'
-import './ui-polish.css'
+import './styles/base.css'
+import './styles/theme.css'
+import './styles/skeletons.css'
+import './styles/scope-creation.css'
+import './styles/memories.css'
+import './styles/layout.css'
 import App from './App.vue'
 
 createApp(App).mount('#app')
