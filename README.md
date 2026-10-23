@@ -66,8 +66,11 @@ outros dados locais do painel.
 - Implementado: listagem de sessões e leitura paginada das observações por sessão.
 - Implementado: criação de workspace/projeto ao gravar a primeira memória via `POST /admin/write-page`; criar um workspace também exige informar seu primeiro projeto.
 - Implementado: renomeação e exclusão administrativa de projetos/workspaces, com prévia de impacto antes de excluir.
+- Implementado: visualização de relações tipadas e links entre memórias.
+- Implementado: criação de categorias (com uma memória inicial `overview.md`), exclusão recuperável de categorias e exclusão em lote de memórias.
+- Implementado: indicadores para memórias de sessão, incluindo estado de consolidação quando disponível.
+- Implementado: consulta e restauração de itens da Lixeira. Exclusão permanente e esvaziamento não estão disponíveis porque a API do ai-memory não oferece operações para apagar checkpoints.
 - Requer no servidor ai-memory: `AI_MEMORY_ENABLE_WEB=true` (ou `--enable-web`), que habilita o browser somente leitura e a API.
-- Próximo: revisão/limpeza assistida de sessões e editor Markdown com gravação condicional via MCP.
-- Depois: relações, lixeira e trilha de auditoria.
+- Exclusões de memórias e categorias usam as operações administrativas root-only e movem cada página para os checkpoints recuperáveis da Lixeira.
 
 O proxy da API de desenvolvimento escuta apenas em `127.0.0.1`. A publicação remota exige configurar autenticação e um backend de produção; a chave ai-memory não pode ser embutida no frontend estático.

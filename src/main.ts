@@ -3,6 +3,7 @@ import './style.css'
 import './theme.css'
 import './skeleton.css'
 import './scope-creation.css'
+import './memory-management.css'
 import App from './App.vue'
 
 createApp(App).mount('#app')

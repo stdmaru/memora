@@ -68,7 +68,10 @@ específicas do ai-memory, sem expor uma ponte genérica ao browser:
 | Listar sessões e observações | `memory_read_session_observations` (além da listagem a definir) |
 | Criar workspace/projeto com a primeira memória | `memory_write_page` ou `POST /admin/write-page` (a escrita inicial cria o escopo) |
 | Criar ou editar uma memória | `memory_write_page` ou `POST /admin/write-page` |
-| Excluir e recuperar | `memory_delete_page`, `memory_restore_page` |
+| Excluir uma ou várias memórias e recuperar | `memory_delete_page`, `memory_restore_page` |
+| Criar categoria | `memory_write_page` ou `POST /admin/write-page` (grava `overview.md`) |
+| Excluir categoria | Listar as páginas no caminho da categoria e chamar `memory_delete_page` para cada uma |
+| Apagar checkpoints definitivamente | Não suportado pela API; a interface não oferece purga nem esvaziamento da Lixeira |
 | Auditoria de qualidade | `memory_lint` |
 
 O adaptador aplica o escopo selecionado a todas as leituras e não encaminha
@@ -78,8 +81,6 @@ root ou ferramentas MCP com autorização adequada.
 
 ## Próximos incrementos
 
-1. Implementar edição Markdown e escrita condicional pelo MCP.
-2. Conectar relações, lixeira/restauração e auditoria.
-3. Implementar renomeação/exclusão de projetos e workspaces com confirmação e permissões root.
-4. Preparar a publicação remota atrás de HTTPS e proxy confiável antes de
+1. Revisar/limpar sessões com assistência e aprimorar trilha de auditoria.
+2. Preparar a publicação remota atrás de HTTPS e proxy confiável antes de
    disponibilizar o painel pela VPN.
