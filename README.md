@@ -112,6 +112,12 @@ Autenticação não substitui HTTPS nem controles de rede: mantenha o backend
 acessível somente por um proxy confiável e não exponha o servidor de
 desenvolvimento do Vite.
 
+Este release cria apenas a conta administradora inicial e não oferece
+isolamento para usuários não confiáveis; não opere o painel como serviço
+multi-tenant compartilhado. Cadastre somente endpoints ai-memory confiáveis:
+os bearers salvos são criptografados em repouso, mas enviados ao endpoint
+configurado para autenticar as chamadas.
+
 Para um servidor ai-memory sem autenticação em loopback, deixe o bearer de
 leitura vazio. Não use esse modo ao expor o serviço na rede.
 
