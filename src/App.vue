@@ -33,7 +33,11 @@ const scopeCreationNotice = ref('')
 let initializingPanel = false
 let observationRequestId = 0
 let detailRequestId = 0
+let relationRequestId = 0
 const relationTypes = ['causes', 'fixes', 'contradicts'] as const
+const relationMemories = ref<Memory[]>([])
+const relationLoading = ref(false)
+const relationError = ref('')
 const memories = ref<Memory[]>([])
 const sessions = ref<Session[]>([])
 const selectedSession = ref<Session | null>(null)
@@ -136,7 +140,7 @@ const memoryDateGroups = computed(() => groupByDate(filtered.value, memory => me
 const overviewPageDateGroups = computed(() => groupByDate(overview.value?.briefing.recent_pages || [], page => page.updated_at))
 const sessionDateGroups = computed(() => groupByDate(sessions.value, session => session.started_at))
 const relationEntries = computed<RelationEntry[]>(() => {
-  const pagesByPath = new Map(memories.value.map(page => [page.path, page]))
+  const pagesByPath = new Map(relationMemories.value.map(page => [page.path, page]))
   const entries: RelationEntry[] = []
   const seen = new Set<string>()
   const add = (source: Memory, targetPath: string, kind: string, fallbackTitle?: string) => {
@@ -146,12 +150,13 @@ const relationEntries = computed<RelationEntry[]>(() => {
     seen.add(key)
     entries.push({ source, targetPath, targetTitle: pagesByPath.get(targetPath)?.title || fallbackTitle || targetPath, kind })
   }
-  for (const page of memories.value) {
+  for (const page of relationMemories.value) {
     const rawRelations = page.frontmatter?.relations
     if (rawRelations && typeof rawRelations === 'object') {
       for (const kind of relationTypes) {
         const targets = (rawRelations as Record<string, unknown>)[kind]
         if (Array.isArray(targets)) for (const target of targets) add(page, String(target), kind)
+        else if (typeof targets === 'string') add(page, targets, kind)
       }
     }
     for (const link of page.links || []) add(page, link.path, 'link', link.title)
@@ -221,6 +226,50 @@ async function loadMemories(search = '') {
     selectedPage.value = null
     connectionStatus.value = 'Sem conexão'
   } finally { loading.value = false }
+}
+
+async function loadRelations() {
+  const workspace = selectedWorkspace.value
+  const project = selectedProject.value
+  const requestId = ++relationRequestId
+  if (!workspace || !project) {
+    relationMemories.value = []
+    relationLoading.value = false
+    relationError.value = ''
+    return
+  }
+
+  relationLoading.value = true
+  relationError.value = ''
+  const scope = `workspace=${encodeURIComponent(workspace)}&project=${encodeURIComponent(project)}`
+  try {
+    const summaries = await api<PageSummary[]>(`pages?${scope}&limit=100`)
+    const detailedPages: Memory[] = []
+    for (let start = 0; start < summaries.length; start += 8) {
+      if (requestId !== relationRequestId) return
+      const batch = summaries.slice(start, start + 8)
+      const pages = await Promise.all(batch.map(async summary => {
+        const path = summary.path.split('/').map(encodeURIComponent).join('/')
+        const detail = await api<PageSummary & { body_markdown: string; frontmatter: Record<string, unknown>; links?: PageLink[]; backlinks?: PageLink[]; tier?: string }>(`page?${scope}&path=${path}`)
+        return {
+          ...fromSummary({ ...summary, ...detail, snippet: summary.snippet }),
+          summary: summary.snippet || '',
+          bodyMarkdown: detail.body_markdown,
+          frontmatter: detail.frontmatter || {},
+          links: detail.links || [],
+          backlinks: detail.backlinks || [],
+        }
+      }))
+      detailedPages.push(...pages)
+    }
+    if (requestId === relationRequestId) relationMemories.value = detailedPages
+  } catch (error) {
+    if (requestId !== relationRequestId) return
+    relationMemories.value = []
+    relationError.value = error instanceof Error ? error.message : 'Não foi possível carregar as relações deste projeto.'
+  } finally {
+    if (requestId === relationRequestId) relationLoading.value = false
+  }
 }
 
 async function loadSessions() {
@@ -464,7 +513,8 @@ async function loadSectionData(section: string, includeMemory = true) {
   if (section === 'Sessões') await loadSessions()
   else if (section === 'Visão geral') await loadOverview()
   else if (section === 'Lixeira') await loadTrash()
-  else if (includeMemory && (section === 'Memórias' || section === 'Relações')) await loadMemories(query.value)
+  else if (section === 'Relações') await loadRelations()
+  else if (includeMemory && section === 'Memórias') await loadMemories(query.value)
 }
 
 async function initializePanel() {
@@ -744,6 +794,10 @@ watch([selectedWorkspace, selectedProject], () => {
   detailRequestId += 1
   detailLoading.value = false
   memories.value = []
+  relationRequestId += 1
+  relationMemories.value = []
+  relationLoading.value = false
+  relationError.value = ''
   currentDirectory.value = ''
   sessions.value = []
   selectedSession.value = null
@@ -862,8 +916,9 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         <div v-else-if="!trashError" class="relations-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><h3>A lixeira está vazia</h3><p>Não foram encontradas exclusões nos checkpoints recentes. As memórias apagadas não são removidas daqui automaticamente se a exclusão não gerou um checkpoint.</p></div>
       </div>
       <div v-else-if="activeSection === 'Relações'" class="relations-page">
-        <header class="relations-heading"><div><span class="panel-kicker">Mapa do projeto</span><h2><span v-if="loading" class="skeleton skeleton-heading" aria-label="Carregando conexões"></span><template v-else>{{ relationEntries.length }} conexões encontradas</template></h2><p>Relações tipadas e links Markdown entre as memórias deste escopo.</p></div><button class="panel-link" @click="activeSection = 'Memórias'">Abrir memórias →</button></header>
-        <div v-if="loading" class="relation-list skeleton-relation-list" role="status" aria-label="Carregando relações"><article v-for="index in 3" :key="index" class="relation-card skeleton-relation-card"><span class="skeleton skeleton-row"></span><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-row"></span></article></div>
+        <header class="relations-heading"><div><span class="panel-kicker">Mapa do projeto</span><h2><span v-if="relationLoading" class="skeleton skeleton-heading" aria-label="Carregando conexões"></span><template v-else>{{ relationEntries.length }} conexões encontradas</template></h2><p>Relações tipadas e links Markdown entre as memórias deste escopo.</p></div><button class="panel-link" @click="activeSection = 'Memórias'">Abrir memórias →</button></header>
+        <div v-if="relationLoading" class="relation-list skeleton-relation-list" role="status" aria-label="Carregando relações"><article v-for="index in 3" :key="index" class="relation-card skeleton-relation-card"><span class="skeleton skeleton-row"></span><span class="skeleton skeleton-caption"></span><span class="skeleton skeleton-row"></span></article></div>
+        <div v-else-if="relationError" class="api-error"><strong>Não foi possível carregar as relações.</strong><span>{{ relationError }}</span></div>
         <div v-else-if="relationEntries.length" class="relation-list"><article v-for="(entry, index) in relationEntries" :key="`${entry.source.path}-${entry.kind}-${entry.targetPath}-${index}`" class="relation-card"><button class="relation-node" @click="openOverviewPage(entry.source.path)"><i class="kind-badge" :class="entry.source.kind.toLowerCase()">{{ entry.source.kind[0] }}</i><span><strong>{{ entry.source.title }}</strong><small>{{ entry.source.path }}</small></span></button><div class="relation-edge"><span>{{ entry.kind === 'causes' ? 'Causa' : entry.kind === 'fixes' ? 'Resolve' : entry.kind === 'contradicts' ? 'Contradiz' : 'Link Markdown' }}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></div><button class="relation-node" @click="openOverviewPage(entry.targetPath)"><i class="kind-badge" :class="(memories.find(page => page.path === entry.targetPath)?.kind || 'fact').toLowerCase()">{{ (memories.find(page => page.path === entry.targetPath)?.kind || 'M')[0] }}</i><span><strong>{{ entry.targetTitle }}</strong><small>{{ entry.targetPath }}</small></span></button></article></div>
         <div v-else class="relations-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></svg><h3>Nenhuma relação encontrada</h3><p>Adicione conexões tipadas em uma memória ou inclua links Markdown entre páginas. Elas aparecerão aqui para exploração.</p><button class="dialog-primary" @click="activeSection = 'Memórias'">Ir para Memórias</button></div>
       </div>
