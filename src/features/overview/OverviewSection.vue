@@ -1,15 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { OverviewResponse, PageSummary } from '../../types/domain'
 
 type DateGroup<T> = { label: string; items: T[] }
 
-defineProps<{
+const props = defineProps<{
   overview: OverviewResponse | null
   loading: boolean
   error: string
   pageGroups: DateGroup<PageSummary>[]
   formatDate: (value?: string | null) => string
 }>()
+
+const overviewData = computed<OverviewResponse>(() => props.overview ?? ({
+  handoff: null,
+  briefing: {
+    counts: { pages_latest: 0, sessions: 0, observations: 0 },
+    activity_7d: { days: 7, sessions: 0, observations: 0, pages_updated: 0 },
+    activity_30d: { days: 30, sessions: 0, observations: 0, pages_updated: 0 },
+    pending_handoff_count: 0,
+    recent_pages: [],
+    rules: [],
+    slots: [],
+  },
+  health: { stale: 0, duplicates: 0, contradictions: 0, orphans: 0, audited_at: null },
+}))
 
 const emit = defineEmits<{
   openPage: [path: string]
@@ -50,29 +65,29 @@ const emit = defineEmits<{
         </aside>
       </div>
     </div>
-    <template v-else-if="overview">
+    <template v-else>
       <div class="overview-metrics">
-        <article><span class="metric-icon purple">▤</span><div><strong>{{ overview.briefing.counts.pages_latest ?? 0 }}</strong><small>memórias atuais</small></div></article>
-        <article><span class="metric-icon coral">◷</span><div><strong>{{ overview.briefing.counts.sessions ?? 0 }}</strong><small>sessões registradas</small></div></article>
-        <article><span class="metric-icon green">≋</span><div><strong>{{ overview.briefing.counts.observations ?? 0 }}</strong><small>observações capturadas</small></div></article>
-        <article><span class="metric-icon amber">↗</span><div><strong>{{ overview.briefing.pending_handoff_count ?? 0 }}</strong><small>handoffs abertos</small></div></article>
+        <article><span class="metric-icon purple">▤</span><div><strong>{{ overviewData.briefing.counts.pages_latest ?? 0 }}</strong><small>memórias atuais</small></div></article>
+        <article><span class="metric-icon coral">◷</span><div><strong>{{ overviewData.briefing.counts.sessions ?? 0 }}</strong><small>sessões registradas</small></div></article>
+        <article><span class="metric-icon green">≋</span><div><strong>{{ overviewData.briefing.counts.observations ?? 0 }}</strong><small>observações capturadas</small></div></article>
+        <article><span class="metric-icon amber">↗</span><div><strong>{{ overviewData.briefing.pending_handoff_count ?? 0 }}</strong><small>handoffs abertos</small></div></article>
       </div>
       <div class="overview-grid">
         <div class="overview-main">
           <section class="overview-panel">
             <header>
               <div><span class="panel-kicker">Últimos 7 dias</span><h2>Atividade recente</h2></div>
-              <span class="activity-total">{{ overview.briefing.activity_7d?.sessions ?? 0 }} sessões</span>
+              <span class="activity-total">{{ overviewData.briefing.activity_7d?.sessions ?? 0 }} sessões</span>
             </header>
             <div class="activity-stats">
-              <div><strong>{{ overview.briefing.activity_7d?.observations ?? 0 }}</strong><span>observações</span></div>
-              <div><strong>{{ overview.briefing.activity_7d?.pages_updated ?? 0 }}</strong><span>memórias atualizadas</span></div>
-              <div><strong>{{ overview.briefing.activity_30d?.sessions ?? 0 }}</strong><span>sessões em 30 dias</span></div>
+              <div><strong>{{ overviewData.briefing.activity_7d?.observations ?? 0 }}</strong><span>observações</span></div>
+              <div><strong>{{ overviewData.briefing.activity_7d?.pages_updated ?? 0 }}</strong><span>memórias atualizadas</span></div>
+              <div><strong>{{ overviewData.briefing.activity_30d?.sessions ?? 0 }}</strong><span>sessões em 30 dias</span></div>
             </div>
             <div class="activity-comparison">
               <span>30 dias</span>
-              <div><i :style="{ width: `${Math.min(100, ((overview.briefing.activity_7d?.observations || 0) / Math.max(1, overview.briefing.activity_30d?.observations || 0)) * 100)}%` }"></i></div>
-              <strong>{{ overview.briefing.activity_30d?.observations ?? 0 }} observações</strong>
+              <div><i :style="{ width: `${Math.min(100, ((overviewData.briefing.activity_7d?.observations || 0) / Math.max(1, overviewData.briefing.activity_30d?.observations || 0)) * 100)}%` }"></i></div>
+              <strong>{{ overviewData.briefing.activity_30d?.observations ?? 0 }} observações</strong>
             </div>
           </section>
           <section class="overview-panel">
@@ -89,7 +104,7 @@ const emit = defineEmits<{
                   <time>{{ formatDate(page.updated_at) }}</time>
                 </button>
               </section>
-              <p v-if="!overview.briefing.recent_pages?.length" class="empty-state">Ainda não há memórias neste projeto.</p>
+              <p v-if="!overviewData.briefing.recent_pages?.length" class="empty-state">Ainda não há memórias neste projeto.</p>
             </div>
           </section>
         </div>
@@ -97,25 +112,25 @@ const emit = defineEmits<{
           <section class="overview-panel health-panel">
             <header><div><span class="panel-kicker">Qualidade</span><h2>Saúde da memória</h2></div><span class="health-dot"></span></header>
             <div class="health-list">
-              <div><span>Memórias desatualizadas</span><strong>{{ overview.health.stale ?? 0 }}</strong></div>
-              <div><span>Possíveis duplicatas</span><strong>{{ overview.health.duplicates ?? 0 }}</strong></div>
-              <div><span>Contradições</span><strong>{{ overview.health.contradictions ?? 0 }}</strong></div>
-              <div><span>Memórias órfãs</span><strong>{{ overview.health.orphans ?? 0 }}</strong></div>
+              <div><span>Memórias desatualizadas</span><strong>{{ overviewData.health.stale ?? 0 }}</strong></div>
+              <div><span>Possíveis duplicatas</span><strong>{{ overviewData.health.duplicates ?? 0 }}</strong></div>
+              <div><span>Contradições</span><strong>{{ overviewData.health.contradictions ?? 0 }}</strong></div>
+              <div><span>Memórias órfãs</span><strong>{{ overviewData.health.orphans ?? 0 }}</strong></div>
             </div>
-            <small v-if="overview.health.audited_at" class="health-audit">Auditoria {{ formatDate(overview.health.audited_at) }}</small>
+            <small v-if="overviewData.health.audited_at" class="health-audit">Auditoria {{ formatDate(overviewData.health.audited_at) }}</small>
           </section>
-          <section v-if="overview.handoff" class="overview-panel handoff-panel">
+          <section v-if="overviewData.handoff" class="overview-panel handoff-panel">
             <header><div><span class="panel-kicker">Continuidade</span><h2>Handoff aberto</h2></div><span class="handoff-mark">↗</span></header>
-            <p>{{ overview.handoff.summary || 'Há contexto aguardando a próxima sessão.' }}</p>
-            <small>{{ overview.handoff.agent || 'Agente' }} · {{ formatDate(overview.handoff.at) }}</small>
-            <ul v-if="overview.handoff.next_steps?.length"><li v-for="step in overview.handoff.next_steps.slice(0, 3)" :key="step">{{ step }}</li></ul>
+            <p>{{ overviewData.handoff.summary || 'Há contexto aguardando a próxima sessão.' }}</p>
+            <small>{{ overviewData.handoff.agent || 'Agente' }} · {{ formatDate(overviewData.handoff.at) }}</small>
+            <ul v-if="overviewData.handoff.next_steps?.length"><li v-for="step in overviewData.handoff.next_steps.slice(0, 3)" :key="step">{{ step }}</li></ul>
           </section>
           <section class="overview-panel rules-panel">
             <header><div><span class="panel-kicker">Referência</span><h2>Regras do projeto</h2></div></header>
-            <button v-for="rule in overview.briefing.rules || []" :key="rule.path" @click="emit('openPage', rule.path)">
+            <button v-for="rule in overviewData.briefing.rules || []" :key="rule.path" @click="emit('openPage', rule.path)">
               <span>◇</span><strong>{{ rule.title || rule.path }}</strong>
             </button>
-            <p v-if="!overview.briefing.rules?.length" class="subtle-empty">Nenhuma regra registrada.</p>
+            <p v-if="!overviewData.briefing.rules?.length" class="subtle-empty">Nenhuma regra registrada.</p>
           </section>
         </aside>
       </div>

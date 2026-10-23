@@ -42,6 +42,10 @@ const connectionDialogOpen = ref(false)
 const editingNodeId = ref('')
 const confirmRemoveNode = ref(false)
 const activeNode = computed(() => props.connection.nodes.find(node => node.id === props.connection.activeNodeId) || null)
+const selectedNodeId = ref(props.connection.activeNodeId)
+const selectedNode = computed(() => props.connection.nodes.find(node => node.id === selectedNodeId.value) || null)
+const removeTargetNodeId = ref(props.connection.activeNodeId || props.connection.nodes[0]?.id || '')
+const removeTargetNode = computed(() => props.connection.nodes.find(node => node.id === removeTargetNodeId.value) || null)
 const canConnect = computed(() =>
   nodeName.value.trim().length > 0
   && endpoint.value.trim().length > 0
@@ -72,6 +76,15 @@ watch(() => props.connectionMessage, message => {
   clearReadToken.value = false
   clearAdminToken.value = false
   confirmRemoveNode.value = false
+})
+
+watch(() => props.connection.activeNodeId, nodeId => {
+  if (nodeId) selectedNodeId.value = nodeId
+})
+
+watch(() => props.connection.nodes.map(node => node.id), nodeIds => {
+  if (!nodeIds.includes(selectedNodeId.value)) selectedNodeId.value = props.connection.activeNodeId || ''
+  if (!nodeIds.includes(removeTargetNodeId.value)) removeTargetNodeId.value = props.connection.activeNodeId || nodeIds[0] || ''
 })
 
 function submitPassword() {
@@ -106,6 +119,17 @@ function submitConnection() {
     clearReadToken: clearReadToken.value,
     clearAdminToken: clearAdminToken.value,
   })
+}
+
+function selectNode(nodeId: string) {
+  selectedNodeId.value = nodeId
+  confirmRemoveNode.value = false
+  emit('selectNode', nodeId)
+}
+
+function requestNodeRemoval() {
+  removeTargetNodeId.value = selectedNode.value?.id || activeNode.value?.id || props.connection.nodes[0]?.id || ''
+  confirmRemoveNode.value = !confirmRemoveNode.value
 }
 </script>
 
@@ -187,22 +211,29 @@ function submitConnection() {
         <div class="node-selector">
           <label for="ai-memory-node">Node ai-memory</label>
           <div class="node-select-row">
-            <select id="ai-memory-node" :value="connection.activeNodeId" :disabled="connectionBusy" @change="emit('selectNode', ($event.target as HTMLSelectElement).value)">
+            <select id="ai-memory-node" :value="selectedNodeId" :disabled="connectionBusy" @change="selectNode(($event.target as HTMLSelectElement).value)">
               <option value="">Desconectado</option>
               <option v-for="node in connection.nodes" :key="node.id" :value="node.id">{{ node.name }} — {{ node.endpoint }}</option>
             </select>
+            <button class="disconnect-button" type="button" :disabled="connectionBusy || connection.nodes.length === 0" @click="requestNodeRemoval">
+              {{ confirmRemoveNode ? 'Cancelar' : 'Excluir node' }}
+            </button>
             <button class="settings-primary" type="button" :disabled="connectionBusy" @click="openConnectionDialog()">Adicionar</button>
           </div>
-          <div v-if="activeNode" class="node-actions">
-            <button class="settings-secondary" type="button" :disabled="connectionBusy" @click="openConnectionDialog(activeNode)">Editar node</button>
-            <button class="disconnect-button" type="button" :disabled="connectionBusy" @click="confirmRemoveNode = !confirmRemoveNode">{{ confirmRemoveNode ? 'Cancelar remoção' : 'Remover node' }}</button>
+          <div v-if="selectedNode" class="node-actions">
+            <button class="settings-secondary" type="button" :disabled="connectionBusy" @click="openConnectionDialog(selectedNode)">Editar node</button>
           </div>
         </div>
         <p v-if="connectionError && !connectionDialogOpen" class="settings-error" role="alert">{{ connectionError }}</p>
         <p v-if="connectionMessage" class="settings-success" role="status">{{ connectionMessage }}</p>
-        <div v-if="confirmRemoveNode && activeNode" class="disconnect-confirm" role="group" aria-label="Confirmar remoção do node">
-          <p>O node “{{ activeNode.name }}” e as credenciais criptografadas serão removidos deste painel.</p>
-          <button class="disconnect-button" type="button" :disabled="connectionBusy" @click="emit('removeNode', activeNode.id)">Remover node e credenciais</button>
+        <div v-if="confirmRemoveNode && removeTargetNode" class="disconnect-confirm" role="group" aria-label="Confirmar remoção do node">
+          <label>Node a excluir
+            <select v-model="removeTargetNodeId" :disabled="connectionBusy">
+              <option v-for="node in connection.nodes" :key="node.id" :value="node.id">{{ node.name }}</option>
+            </select>
+          </label>
+          <p>O node “{{ removeTargetNode.name }}” e as credenciais criptografadas serão removidos deste painel.</p>
+          <button class="disconnect-button" type="button" :disabled="connectionBusy" @click="emit('removeNode', removeTargetNode.id)">Excluir node e credenciais</button>
         </div>
         <p class="scope-help">O escopo atual é salvo automaticamente para cada node e selecionado na próxima vez que você entrar.</p>
         <button class="settings-secondary" @click="emit('openProjects')">Ver projetos</button>
@@ -320,10 +351,12 @@ function submitConnection() {
 .credential-removal label { display: flex; align-items: center; gap: 7px; color: #77717c; font-size: 10px; }
 .credential-removal input { accent-color: #5d57dd; }
 .disconnect-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; grid-column: 1 / -1; border: 1px solid #f0d4cf; border-radius: 7px; background: #fff5f3; padding: 10px; }
+.disconnect-confirm label { display: grid; flex: 1 1 100%; gap: 6px; color: #8e4c43; font-size: 10px; font-weight: 600; }
+.disconnect-confirm select { width: 100%; border: 1px solid #d9aaa3; border-radius: 6px; background: #fff; color: #5b4140; padding: 8px; font-size: 11px; }
 .disconnect-confirm p { flex: 1 1 100%; margin: 0; color: #8e4c43; font-size: 10px; line-height: 1.5; }
 .disconnect-button { border: 1px solid #d9aaa3; border-radius: 6px; background: #fff; color: #a34436; padding: 8px 11px; font-size: 11px; font-weight: 600; }
 .disconnect-button:disabled { cursor: wait; opacity: .6; }
 .connection-help code { border-radius: 4px; background: #f0eeea; padding: 2px 4px; font: 10px 'DM Mono'; }
 @media (max-width: 760px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } .settings-card { padding: 16px; } }
-@media (max-width: 520px) { .connection-form { grid-template-columns: minmax(0, 1fr); } .connection-form > label:first-child { grid-column: auto; } .credential-removal { grid-column: auto; } .connection-modal-backdrop { padding: 12px; } .connection-modal { padding: 17px; } }
+@media (max-width: 520px) { .connection-form { grid-template-columns: minmax(0, 1fr); } .connection-form > label:first-child { grid-column: auto; } .credential-removal { grid-column: auto; } .connection-modal-backdrop { padding: 12px; } .connection-modal { padding: 17px; } .node-select-row { flex-wrap: wrap; } .node-select-row select { flex: 1 1 100%; } .node-select-row button { flex: 1 1 auto; } }
 </style>

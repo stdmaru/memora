@@ -121,6 +121,16 @@
   color: #f0a69b;
 }
 
+:root[data-theme='dark'] .disconnect-confirm label {
+  color: #f0a69b;
+}
+
+:root[data-theme='dark'] .disconnect-confirm select {
+  border-color: #80534d;
+  background: #2b2428;
+  color: #f0d9d5;
+}
+
 :root[data-theme='dark'] .disconnect-button {
   border-color: #80534d;
   background: #2b2428;

@@ -137,5 +137,10 @@ const emit = defineEmits<{
         <button class="danger" :disabled="!canAdmin || !selectedPage || detailLoading" :title="canAdmin ? 'Mover para Lixeira' : 'Configure um bearer root para excluir'" @click="emit('deletePage')">Excluir</button>
       </div>
     </aside>
+    <aside v-else class="detail-panel detail-empty">
+      <span class="detail-empty-icon" aria-hidden="true">⌕</span>
+      <h2>Nenhuma memória selecionada</h2>
+      <p>Selecione uma memória na lista para inspecionar seu conteúdo e detalhes.</p>
+    </aside>
   </div>
 </template>
