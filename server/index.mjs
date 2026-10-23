@@ -5,6 +5,7 @@ import { deleteConnectionConfig, readConnectionConfig, readConnectionNode, readC
 import { hashPassword, verifyPassword } from './passwords.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
+const host = process.env.MANAGER_API_HOST || '127.0.0.1'
 const sessionCookieName = 'memora_session'
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000
 const invalidLoginHash = `scrypt$131072$8$1$${Buffer.alloc(16).toString('base64url')}$${Buffer.alloc(64).toString('base64url')}`
@@ -591,4 +592,4 @@ const server = createServer(async (request, response) => {
   }
 })
 
-server.listen(port, '127.0.0.1', () => console.log(`API local do painel: http://127.0.0.1:${port}`))
+server.listen(port, host, () => console.log(`API do painel escutando em ${host}:${port}`))

@@ -1,0 +1,68 @@
+services:
+  api:
+    image: ghcr.io/stdmaru/memora-api:${MEMORA_IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: api
+    environment:
+      MEMORA_CONFIG_ENCRYPTION_KEY: ${MEMORA_CONFIG_ENCRYPTION_KEY:?Set MEMORA_CONFIG_ENCRYPTION_KEY in .env}
+      MANAGER_API_HOST: 0.0.0.0
+      MANAGER_API_PORT: 4174
+      MANAGER_DB_PATH: /app/data/ai-memory-manager.sqlite
+      MANAGER_COOKIE_SECURE: ${MANAGER_COOKIE_SECURE:-false}
+    expose:
+      - "4174"
+    volumes:
+      - memora-data:/app/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4174/api/manager/setup/status').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  web:
+    image: ghcr.io/stdmaru/memora-web:${MEMORA_IMAGE_TAG:-latest}
+    build:
+      context: .
+      target: web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${MEMORA_HTTP_PORT:-8080}:8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:8080/healthz
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  memora-data:

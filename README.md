@@ -16,6 +16,62 @@ Interface web para navegar e organizar o serviço [ai-memory](https://github.com
 
 Para validar a aplicação, rode `npm test` e `npm run build`.
 
+## Docker
+
+1. Copie `.env.docker.example` para `.env.docker` e gere uma chave mestra:
+
+   ```sh
+   cp .env.docker.example .env.docker
+   openssl rand -hex 32
+   ```
+
+   Coloque o resultado em `MEMORA_CONFIG_ENCRYPTION_KEY` no `.env.docker` e mantenha
+   essa chave junto do backup do volume. Sem ela, os tokens dos nodes salvos
+   não podem ser descriptografados.
+2. Inicie os containers com `docker compose --env-file .env.docker up -d --build`.
+3. Acesse `http://localhost:8080`.
+
+O serviço `web` serve os arquivos estáticos e encaminha `/api/` para o serviço
+`api`, que não publica sua porta diretamente no host. O SQLite fica no volume
+Docker `memora-data`. Para manter o backend protegido, a porta web publicada
+fica vinculada a `127.0.0.1`; use um proxy HTTPS confiável para acesso remoto e
+defina `MANAGER_COOKIE_SECURE=true` no `.env.docker`.
+
+As imagens de produção separadas da interface e da API são publicadas no GitHub
+Container Registry como `ghcr.io/stdmaru/memora-web` e
+`ghcr.io/stdmaru/memora-api`. Para usar uma versão específica com Compose,
+defina `MEMORA_IMAGE_TAG` no `.env.docker` (por exemplo, `1.2.0`); por padrão, usa
+`latest`. Os pacotes GHCR são privados inicialmente; autentique com `docker
+login ghcr.io` antes de baixar, ou altere a visibilidade do pacote no GitHub
+caso queira disponibilizá-lo publicamente. Para usar as imagens publicadas em
+vez de compilar localmente, rode `docker compose --env-file .env.docker pull` e
+depois `docker compose --env-file .env.docker up -d --no-build`.
+
+## CI e releases
+
+O GitHub Actions executa testes, build do frontend e build dos dois alvos Docker
+em pushes para `dev`/`main` e em pull requests para essas branches. Releases são
+manuais: não há release quando nenhum tag é enviado. Para publicar, atualize a
+versão em `package.json` e `package-lock.json`, faça commit dessa versão na
+branch `main`, crie um tag `v` no mesmo commit e envie ambos:
+
+```sh
+npm version 0.1.0 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: release 0.1.0"
+git tag v0.1.0
+git push origin main
+git push origin v0.1.0
+```
+
+O workflow roda somente para tags `v*`, valida o formato `vX.Y.Z` e exige que a
+versão do tag seja igual à versão no `package.json`. Depois executa testes e
+build, publica as imagens multi-arquitetura `linux/amd64` e `linux/arm64` no
+GHCR e cria a release do GitHub. As notas da release são geradas pelo GitHub
+com base nos commits e pull requests desde a release anterior; nenhum arquivo
+`CHANGELOG.md` é atualizado automaticamente. Tags de pré-release, como
+`v0.2.0-rc.1`, são publicadas como pré-release e não alteram a imagem `latest`.
+
 No primeiro acesso, o OOBE solicita nome, e-mail e senha para criar a primeira
 conta de administrador no SQLite. O setup só pode ser concluído uma vez e inicia
 uma sessão autenticada. Nos acessos seguintes, o painel exige login; a sessão
