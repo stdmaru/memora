@@ -14,6 +14,7 @@ import type {
   AuthUser,
   BulkDeleteDialog,
   CategoryCreateDialog,
+  ConnectionStatus,
   Memory,
   Observation,
   OverviewResponse,
@@ -107,6 +108,10 @@ const theme = ref<Theme>('system')
 const themeMenuOpen = ref(false)
 const persistedSettings = ref<{ scope?: { workspace: string; project: string } }>({})
 const settingsReady = ref(false)
+const connectionConfig = ref<ConnectionStatus>({ configured: false, endpoint: '', hasReadToken: false, hasAdminToken: false })
+const nodeConfigBusy = ref(false)
+const nodeConfigError = ref('')
+const nodeConfigMessage = ref('')
 let systemTheme: MediaQueryList | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 const workspaceProjects = computed(() => projects.value.filter(project => project.workspace_name === selectedWorkspace.value))
@@ -566,7 +571,7 @@ async function loadScopes() {
 }
 
 async function loadTrash() {
-  if (!canAdmin.value) { trashEntries.value = []; trashError.value = 'Configure AI_MEMORY_ADMIN_TOKEN com um bearer root para consultar e restaurar checkpoints.'; return }
+  if (!canAdmin.value) { trashEntries.value = []; trashError.value = 'Configure um bearer root administrativo em Configurações para consultar e restaurar checkpoints.'; return }
   trashLoading.value = true
   trashError.value = ''
   trashMessage.value = ''
@@ -709,6 +714,7 @@ function openProject(project: ProjectSummary) {
 }
 
 async function loadSectionData(section: string, includeMemory = true) {
+  if (!connectionConfig.value.configured) return
   if (section === 'Sessões') await loadSessions()
   else if (section === 'Visão geral') await loadOverview()
   else if (section === 'Lixeira') await loadTrash()
@@ -720,6 +726,47 @@ async function initializePanel() {
   initializingPanel = true
   try {
     persistedSettings.value = await api<{ scope?: { workspace: string; project: string } }>('settings')
+    try {
+      connectionConfig.value = await api<ConnectionStatus>('connection')
+    } catch (error) {
+      connectionConfig.value = { configured: false, endpoint: '', hasReadToken: false, hasAdminToken: false }
+      connectionStatus.value = 'Sem conexão'
+      nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível consultar a configuração do node.'
+      activeSection.value = 'Configurações'
+      workspaces.value = []
+      projects.value = []
+      memories.value = []
+      selectedWorkspace.value = ''
+      selectedProject.value = ''
+      scopesLoading.value = false
+      loading.value = false
+      settingsReady.value = true
+      return
+    }
+    if (!connectionConfig.value.configured) {
+      activeSection.value = 'Configurações'
+      connectionStatus.value = 'ai-memory desconectado'
+      workspaces.value = []
+      projects.value = []
+      memories.value = []
+      sessions.value = []
+      relationMemories.value = []
+      trashEntries.value = []
+      selectedWorkspace.value = ''
+      selectedProject.value = ''
+      selectedPath.value = ''
+      selectedPage.value = null
+      scopesLoading.value = false
+      loading.value = false
+      settingsReady.value = true
+      return
+    }
+    try {
+      await api<{ level: string; version: string }>('identity')
+      connectionStatus.value = 'ai-memory conectado'
+    } catch {
+      connectionStatus.value = 'Sem conexão'
+    }
     await loadScopes()
     settingsReady.value = true
     await Promise.all([
@@ -748,9 +795,6 @@ async function startAuthenticatedSession(user?: AuthUser | null) {
   currentUser.value = authenticatedUser
   setupChecked.value = true
   activateAppTheme(authenticatedUser.theme)
-  void api<{ level: string; version: string }>('identity')
-    .then(() => { connectionStatus.value = 'ai-memory conectado' })
-    .catch(() => { connectionStatus.value = 'Sem conexão' })
   await initializePanel()
 }
 
@@ -869,7 +913,7 @@ async function submitScopeCreateDialog() {
   let created = false
   try {
     const latest = await api<ScopeResponse>('scopes')
-    if (!latest.canAdmin) throw new Error('A criação requer um bearer root configurado no servidor.')
+    if (!latest.canAdmin) throw new Error('A criação requer um bearer root configurado em Configurações.')
     if (dialog.kind === 'workspace' && latest.workspaces.some(item => item.workspace_name === workspace)) {
       dialog.error = 'Esse workspace já existe. Escolha outro nome ou crie o projeto dentro dele.'
       return
@@ -1064,6 +1108,68 @@ async function changePassword(passwords: { currentPassword: string; newPassword:
     passwordBusy.value = false
   }
 }
+async function connectAiMemory(config: {
+  endpoint: string
+  readToken: string
+  adminToken: string
+  clearReadToken: boolean
+  clearAdminToken: boolean
+}) {
+  if (nodeConfigBusy.value) return
+  nodeConfigBusy.value = true
+  nodeConfigError.value = ''
+  nodeConfigMessage.value = ''
+  try {
+    connectionConfig.value = await api<ConnectionStatus>('connection', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(config),
+    })
+    connectionStatus.value = 'ai-memory conectado'
+    nodeConfigMessage.value = 'Conexão validada e salva com segurança.'
+    apiError.value = ''
+    try {
+      await initializePanel()
+    } catch (error) {
+      apiError.value = error instanceof Error ? error.message : 'Conexão salva, mas não foi possível carregar os escopos.'
+    }
+  } catch (error) {
+    nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível conectar ao node ai-memory.'
+  } finally {
+    nodeConfigBusy.value = false
+  }
+}
+
+async function disconnectAiMemory() {
+  if (nodeConfigBusy.value) return
+  nodeConfigBusy.value = true
+  nodeConfigError.value = ''
+  nodeConfigMessage.value = ''
+  try {
+    connectionConfig.value = await api<ConnectionStatus>('connection', { method: 'DELETE' })
+    connectionStatus.value = 'ai-memory desconectado'
+    nodeConfigMessage.value = 'Node desconectado. As credenciais salvas foram removidas.'
+    apiError.value = ''
+    canAdmin.value = false
+    workspaces.value = []
+    projects.value = []
+    memories.value = []
+    sessions.value = []
+    relationMemories.value = []
+    trashEntries.value = []
+    selectedWorkspace.value = ''
+    selectedProject.value = ''
+    selectedPath.value = ''
+    selectedPage.value = null
+    scopesLoading.value = false
+    loading.value = false
+    activeSection.value = 'Configurações'
+  } catch (error) {
+    nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível desconectar o node.'
+  } finally {
+    nodeConfigBusy.value = false
+  }
+}
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
 function retrySetupCheck() { window.location.reload() }
 onMounted(() => {
@@ -1101,7 +1207,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         <div class="scope-control"><select id="workspace-select" v-model="selectedWorkspace" :disabled="workspaces.length === 0" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select><button v-if="canAdmin" class="icon-action" title="Renomear workspace" aria-label="Renomear workspace" :disabled="!selectedWorkspace" @click="manageScope('rename', 'workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></button><button v-if="canAdmin" class="icon-action danger" title="Excluir workspace" aria-label="Excluir workspace" :disabled="!selectedWorkspace" @click="manageScope('delete', 'workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="canAdmin" class="icon-action add" title="Criar workspace e projeto inicial" aria-label="Criar workspace" @click="openScopeCreateDialog('workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <label for="project-select">Projeto</label>
         <div class="scope-control"><select id="project-select" v-model="selectedProject" :disabled="workspaceProjects.length === 0" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select><button v-if="canAdmin" class="icon-action" title="Renomear projeto" aria-label="Renomear projeto" :disabled="!selectedProject" @click="manageScope('rename', 'project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></button><button v-if="canAdmin" class="icon-action danger" title="Excluir projeto" aria-label="Excluir projeto" :disabled="!selectedProject" @click="manageScope('delete', 'project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="canAdmin" class="icon-action add" title="Criar projeto neste workspace" aria-label="Criar projeto" :disabled="!selectedWorkspace" @click="openScopeCreateDialog('project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
-        <small v-if="!canAdmin" class="admin-hint">Ações administrativas indisponíveis: configure um bearer root separado.</small>
+        <small v-if="!canAdmin" class="admin-hint">Ações administrativas indisponíveis: cadastre o bearer root em Configurações.</small>
       </div>
       <nav><button v-for="section in sections" :key="section" class="nav-item" :class="{ active: activeSection === section }" @click="activeSection = section"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><template v-if="section === 'Visão geral'"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></template><template v-else-if="section === 'Memórias'"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></template><template v-else-if="section === 'Sessões'"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></template><template v-else-if="section === 'Relações'"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></template><template v-else-if="section === 'Projetos'"><path d="M4 7h6l2 2h8v10H4zM4 7V5h6l2 2"/></template><template v-else><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></template></svg></span><span class="nav-label">{{ section }}</span><b v-if="section === 'Memórias'">{{ memories.length }}</b></button></nav>
       <div class="sidebar-bottom"><div class="security-note"><span>●</span><div><strong>{{ connectionStatus }}</strong><small>API do ai-memory</small></div></div><button class="nav-item" :class="{ active: activeSection === 'Configurações' }" :aria-current="activeSection === 'Configurações' ? 'page' : undefined" @click="activeSection = 'Configurações'"><span>⚙</span>Configurações</button><div class="user"><i>{{ currentUser?.name.trim().slice(0, 2).toUpperCase() }}</i><div><strong>{{ currentUser?.name }}</strong><small>Administrador</small></div><button>···</button></div></div>
@@ -1114,7 +1220,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       <p v-if="scopeCreationNotice" class="scope-creation-notice" role="status">{{ scopeCreationNotice }}</p>
       <p v-if="memoryActionNotice" class="memory-action-notice" role="status">{{ memoryActionNotice }}</p>
       <div v-if="themeError && activeSection !== 'Configurações'" class="api-error" role="alert"><strong>Não foi possível salvar a aparência.</strong><span>{{ themeError }}</span></div>
-      <div v-if="apiError && activeSection !== 'Visão geral' && activeSection !== 'Configurações'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
+      <div v-if="apiError && activeSection !== 'Visão geral' && activeSection !== 'Configurações'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira o endpoint e o bearer cadastrados em Configurações. A API de leitura deve estar habilitada no servidor ai-memory.</small></div>
       <div v-if="activeSection !== 'Visão geral' && activeSection !== 'Configurações'" class="overview-cards"><article><i class="violet">◫</i><div><strong v-if="scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading)" class="skeleton skeleton-value" aria-label="Carregando total"></strong><strong v-else>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading) ? 'Carregando…' : 'escopo selecionado' }}</small></article><article><i class="orange">⌘</i><div><strong v-if="scopesLoading" class="skeleton skeleton-value" aria-label="Carregando projeto"></strong><strong v-else>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ scopesLoading ? 'Carregando…' : selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
       <OverviewSection
         v-if="activeSection === 'Visão geral'"
@@ -1132,12 +1238,18 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         :theme="theme"
         :theme-error="themeError"
         :connection-status="connectionStatus"
+        :connection="connectionConfig"
+        :connection-busy="nodeConfigBusy"
+        :connection-error="nodeConfigError"
+        :connection-message="nodeConfigMessage"
         :workspace="selectedWorkspace"
         :project="selectedProject"
         :password-busy="passwordBusy"
         :password-error="passwordError"
         :password-message="passwordMessage"
         @theme-change="setTheme"
+        @connect-node="connectAiMemory"
+        @disconnect-node="disconnectAiMemory"
         @change-password="changePassword"
         @logout="logout"
         @open-projects="activeSection = 'Projetos'"

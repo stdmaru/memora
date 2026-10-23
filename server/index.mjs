@@ -1,14 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, findAdminPasswordById, hasAdmin, logAudit, readSession, readSettings, updateAdminPassword, updateUserTheme, writeSettings } from './database.mjs'
+import { deleteConnectionConfig, readConnectionConfig, readConnectionStatus, validateEncryptionKey, writeConnectionConfig } from './connection-config.mjs'
 import { hashPassword, verifyPassword } from './passwords.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
-const mcpUrl = process.env.AI_MEMORY_MCP_URL?.replace(/\/+$/, '')
-const token = process.env.AI_MEMORY_AUTH_TOKEN
-const adminToken = process.env.AI_MEMORY_ADMIN_TOKEN
-const preferredWorkspace = process.env.AI_MEMORY_WORKSPACE || ''
-const preferredProject = process.env.AI_MEMORY_PROJECT || ''
 const sessionCookieName = 'memora_session'
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000
 const invalidLoginHash = `scrypt$131072$8$1$${Buffer.alloc(16).toString('base64url')}$${Buffer.alloc(64).toString('base64url')}`
@@ -95,26 +91,38 @@ async function readJson(request, maxBytes = 8192) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new UpstreamError('JSON inválido.', 400) }
 }
 
-function missingConfiguration() {
-  return mcpUrl ? [] : ['AI_MEMORY_MCP_URL']
-}
-
-function getAiMemoryBaseUrl() {
-  const url = new URL(mcpUrl)
+function getAiMemoryBaseUrl(endpoint) {
+  const url = new URL(endpoint)
   url.pathname = url.pathname.replace(/\/mcp\/?$/, '').replace(/\/$/, '')
   url.search = ''
   url.hash = ''
   return url.toString().replace(/\/$/, '')
 }
 
+function savedConnectionConfig() {
+  try { return readConnectionConfig() } catch (error) {
+    throw new UpstreamError(error instanceof Error ? error.message : 'Não foi possível ler as credenciais do node.', 503)
+  }
+}
+
+function requireEncryptionKey() {
+  try { validateEncryptionKey() } catch (error) {
+    throw new UpstreamError(error instanceof Error ? error.message : 'A chave de criptografia não está configurada.', 503)
+  }
+}
+
 async function getAiMemory(path) {
+  const config = savedConnectionConfig()
+  if (!config) throw new UpstreamError('Conecte um node ai-memory em Configurações para continuar.', 503)
+  const token = config.readToken
   const headers = { accept: 'application/json' }
   if (token) headers.authorization = `Bearer ${token}`
   let response
   try {
-    response = await fetch(`${getAiMemoryBaseUrl()}${path}`, {
+    response = await fetch(`${getAiMemoryBaseUrl(config.endpoint)}${path}`, {
       headers,
       signal: AbortSignal.timeout(20000),
+      redirect: 'error',
     })
   } catch (error) {
     const detail = error instanceof Error && error.name === 'TimeoutError' ? 'Tempo limite excedido ao conectar ao ai-memory.' : 'Não foi possível conectar à API do ai-memory.'
@@ -133,14 +141,18 @@ async function getAiMemory(path) {
 }
 
 async function postAdmin(path, payload) {
-  if (!adminToken) throw new UpstreamError('Configure AI_MEMORY_ADMIN_TOKEN com o bearer root do ai-memory para habilitar ações administrativas.', 503)
+  const config = savedConnectionConfig()
+  if (!config) throw new UpstreamError('Conecte um node ai-memory em Configurações para continuar.', 503)
+  const adminToken = config.adminToken
+  if (!adminToken) throw new UpstreamError('Configure o token root nas Configurações para habilitar ações administrativas.', 503)
   let response
   try {
-    response = await fetch(`${getAiMemoryBaseUrl()}${path}`, {
+    response = await fetch(`${getAiMemoryBaseUrl(config.endpoint)}${path}`, {
       method: 'POST',
       headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(20000),
+      redirect: 'error',
     })
   } catch {
     throw new UpstreamError('Não foi possível conectar à API administrativa do ai-memory.')
@@ -153,12 +165,16 @@ async function postAdmin(path, payload) {
 }
 
 async function getAdmin(path) {
-  if (!adminToken) throw new UpstreamError('Configure AI_MEMORY_ADMIN_TOKEN com o bearer root do ai-memory para acessar a lixeira.', 503)
+  const config = savedConnectionConfig()
+  if (!config) throw new UpstreamError('Conecte um node ai-memory em Configurações para continuar.', 503)
+  const adminToken = config.adminToken
+  if (!adminToken) throw new UpstreamError('Configure o token root nas Configurações para acessar a lixeira.', 503)
   let response
   try {
-    response = await fetch(`${getAiMemoryBaseUrl()}${path}`, {
+    response = await fetch(`${getAiMemoryBaseUrl(config.endpoint)}${path}`, {
       headers: { accept: 'application/json', authorization: `Bearer ${adminToken}` },
       signal: AbortSignal.timeout(20000),
+      redirect: 'error',
     })
   } catch {
     throw new UpstreamError('Não foi possível conectar à API administrativa do ai-memory.')
@@ -168,6 +184,79 @@ async function getAdmin(path) {
   try { result = body ? JSON.parse(body) : null } catch { result = null }
   if (!response.ok) throw new UpstreamError(result?.error || `ai-memory respondeu HTTP ${response.status}.`, response.status)
   return result
+}
+
+function validateConnectionEndpoint(value) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048) {
+    throw new UpstreamError('Informe o endereço do endpoint MCP.', 400)
+  }
+  let endpoint
+  try { endpoint = new URL(value.trim()) } catch { throw new UpstreamError('O endereço do endpoint MCP não é válido.', 400) }
+  if (!['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+    throw new UpstreamError('Use um endereço HTTP ou HTTPS válido, sem credenciais, parâmetros ou fragmentos.', 400)
+  }
+  endpoint.pathname = endpoint.pathname.replace(/\/+$/, '')
+  return endpoint.toString().replace(/\/$/, '')
+}
+
+async function probeConnection({ endpoint, readToken, adminToken }) {
+  const baseUrl = getAiMemoryBaseUrl(endpoint)
+  const headers = new Headers({ accept: 'application/json' })
+  if (readToken) headers.set('authorization', ['Bearer', readToken].join(' '))
+
+  for (const path of ['/identity', '/api/v1/workspaces', '/api/v1/projects']) {
+    let response
+    try {
+      response = await fetch(`${baseUrl}${path}`, {
+        headers,
+        signal: AbortSignal.timeout(10000),
+        redirect: 'error',
+      })
+    } catch (error) {
+      const message = error instanceof Error && error.name === 'TimeoutError'
+        ? 'Tempo limite excedido ao testar o node ai-memory.'
+        : 'Não foi possível conectar ao node ai-memory. Confira o endereço e a disponibilidade do serviço.'
+      throw new UpstreamError(message, 502)
+    }
+    if (!response.ok) {
+      if (response.status === 404 && path.startsWith('/api/v1/')) {
+        throw new UpstreamError('A API de leitura não está habilitada no servidor. Ative AI_MEMORY_ENABLE_WEB=true (ou --enable-web) no ai-memory.', 424)
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new UpstreamError('Autenticação recusada pelo node. Confira o bearer de leitura.', response.status)
+      }
+      throw new UpstreamError(`O node respondeu HTTP ${response.status} em ${path}.`, 502)
+    }
+    let payload
+    try { payload = await response.json() } catch { throw new UpstreamError(`O node retornou uma resposta inválida em ${path}.`, 502) }
+    if (!payload || typeof payload !== 'object') throw new UpstreamError(`O node retornou uma resposta inválida em ${path}.`, 502)
+    if (path !== '/identity' && !Array.isArray(payload)) {
+      throw new UpstreamError(`O node retornou uma lista inválida em ${path}.`, 502)
+    }
+  }
+
+  if (adminToken) {
+    const adminHeaders = new Headers({ accept: 'application/json', authorization: ['Bearer', adminToken].join(' ') })
+    let response
+    try {
+      response = await fetch(`${baseUrl}/admin/checkpoints?limit=1`, {
+        headers: adminHeaders,
+        signal: AbortSignal.timeout(10000),
+        redirect: 'error',
+      })
+    } catch {
+      throw new UpstreamError('Não foi possível validar o bearer root administrativo.', 502)
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new UpstreamError('Autenticação administrativa recusada pelo node. Confira o bearer root.', response.status)
+    }
+    if (!response.ok) throw new UpstreamError(`O node respondeu HTTP ${response.status} ao validar o bearer root.`, 502)
+    let checkpoints
+    try { checkpoints = await response.json() } catch {
+      throw new UpstreamError('O node retornou uma resposta inválida ao validar o bearer root.', 502)
+    }
+    if (!Array.isArray(checkpoints)) throw new UpstreamError('O node não retornou checkpoints válidos para o bearer root.', 502)
+  }
 }
 
 function scopeFrom(url) {
@@ -290,8 +379,47 @@ const server = createServer(async (request, response) => {
       return send(response, 200, { changed: true })
     }
 
+    if (url.pathname === '/api/manager/connection' && request.method === 'GET') {
+      return send(response, 200, readConnectionStatus())
+    }
+
+    if (url.pathname === '/api/manager/connection' && request.method === 'PUT') {
+      const body = await readJson(request, 16384)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return send(response, 400, { error: 'Dados da conexão inválidos.' })
+      for (const key of ['readToken', 'adminToken']) {
+        if (key in body && typeof body[key] !== 'string') return send(response, 400, { error: 'Os tokens devem ser informados como texto.' })
+      }
+      for (const key of ['clearReadToken', 'clearAdminToken']) {
+        if (key in body && typeof body[key] !== 'boolean') return send(response, 400, { error: 'Opção de remoção de token inválida.' })
+      }
+      const endpoint = validateConnectionEndpoint(body?.endpoint)
+      const existing = savedConnectionConfig()
+      const readToken = typeof body?.readToken === 'string' && body.readToken.trim()
+        ? body.readToken.trim()
+        : body?.clearReadToken ? '' : existing?.readToken || ''
+      const adminToken = typeof body?.adminToken === 'string' && body.adminToken.trim()
+        ? body.adminToken.trim()
+        : body?.clearAdminToken ? '' : existing?.adminToken || ''
+      if (Buffer.byteLength(readToken, 'utf8') > 4096 || Buffer.byteLength(adminToken, 'utf8') > 4096) {
+        return send(response, 400, { error: 'Os tokens não podem exceder 4096 caracteres.' })
+      }
+      requireEncryptionKey()
+      await probeConnection({ endpoint, readToken, adminToken })
+      writeConnectionConfig({ endpoint, readToken, adminToken })
+      logAudit({ action: 'configure-ai-memory', outcome: 'success', detail: endpoint })
+      return send(response, 200, readConnectionStatus())
+    }
+
+    if (url.pathname === '/api/manager/connection' && request.method === 'DELETE') {
+      deleteConnectionConfig()
+      logAudit({ action: 'disconnect-ai-memory', outcome: 'success' })
+      return send(response, 200, readConnectionStatus())
+    }
+
     if (url.pathname === '/api/manager/settings' && request.method === 'GET') {
-      return send(response, 200, readSettings())
+      const settings = readSettings()
+      delete settings.ai_memory_connection
+      return send(response, 200, settings)
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'PUT') {
@@ -306,11 +434,10 @@ const server = createServer(async (request, response) => {
         updates.scope = { workspace: scope.workspace, project: scope.project }
       }
       if (!Object.keys(updates).length) return send(response, 400, { error: 'Nenhuma configuração válida foi enviada.' })
-      return send(response, 200, writeSettings(updates))
+      const settings = writeSettings(updates)
+      delete settings.ai_memory_connection
+      return send(response, 200, settings)
     }
-
-    const missing = missingConfiguration()
-    if (missing.length) return send(response, 503, { error: 'Configure a URL do ai-memory no .env.', missing })
 
     if (url.pathname === '/api/manager/identity') {
       const identity = await getAiMemory('/identity')
@@ -325,8 +452,8 @@ const server = createServer(async (request, response) => {
       return send(response, 200, {
         workspaces: Array.isArray(workspaces) ? workspaces : [],
         projects: Array.isArray(projects) ? projects : [],
-        preferred: { workspace: preferredWorkspace, project: preferredProject },
-        canAdmin: Boolean(adminToken),
+        preferred: { workspace: '', project: '' },
+        canAdmin: Boolean(readConnectionConfig()?.adminToken),
       })
     }
 

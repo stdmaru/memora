@@ -1,5 +1,6 @@
 export type Theme = 'light' | 'dark' | 'system'
 export type AuthUser = { id: string; name: string; email: string; role: 'admin'; theme: Theme }
+export type ConnectionStatus = { configured: boolean; endpoint: string; hasReadToken: boolean; hasAdminToken: boolean }
 export type PageLink = { path: string; title?: string; kind?: string }
 export type Memory = {
   path: string

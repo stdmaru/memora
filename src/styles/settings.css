@@ -66,6 +66,52 @@
   color: #a3d3a7;
 }
 
+:root[data-theme='dark'] .connection-form > label {
+  color: #b9b3c0;
+}
+
+:root[data-theme='dark'] .connection-form input:not([type='checkbox']) {
+  border-color: #484452;
+  background: #1e1c24;
+  color: #f0ecf2;
+}
+
+:root[data-theme='dark'] .connection-form label small,
+:root[data-theme='dark'] .credential-saved,
+:root[data-theme='dark'] .credential-removal label {
+  color: #a59eac;
+}
+
+:root[data-theme='dark'] .node-status {
+  background: #382926;
+  color: #f0a69b;
+}
+
+:root[data-theme='dark'] .node-status.connected {
+  background: #263329;
+  color: #a3d3a7;
+}
+
+:root[data-theme='dark'] .disconnect-confirm {
+  border-color: #62423e;
+  background: #382926;
+}
+
+:root[data-theme='dark'] .disconnect-confirm p {
+  color: #f0a69b;
+}
+
+:root[data-theme='dark'] .disconnect-button {
+  border-color: #80534d;
+  background: #2b2428;
+  color: #f0a69b;
+}
+
+:root[data-theme='dark'] .connection-help code {
+  background: #302d37;
+  color: #d4cedb;
+}
+
 :root[data-theme='dark'] .settings-icon.violet,
 :root[data-theme='dark'] .settings-icon.orange,
 :root[data-theme='dark'] .settings-icon.green,

@@ -4,10 +4,14 @@ Interface web para navegar e organizar o serviço [ai-memory](https://github.com
 
 ## Desenvolvimento
 
-1. Preencha o `.env` com o endpoint MCP e uma chave com permissão de leitura.
-2. No servidor ai-memory, habilite o browser/API de leitura (`AI_MEMORY_ENABLE_WEB=true` ou `--enable-web`). O painel usa `/api/v1` para descobrir workspaces/projetos e ler suas páginas.
+1. Configure no `.env` uma chave mestra para criptografar as credenciais do node
+   ai-memory: `MEMORA_CONFIG_ENCRYPTION_KEY`. Gere uma chave aleatória com
+   `openssl rand -hex 32`; mantenha-a segura e persistente.
+2. No servidor ai-memory, habilite a API de leitura (`AI_MEMORY_ENABLE_WEB=true`
+   ou `--enable-web`). O painel usa `/api/v1` para descobrir escopos e ler páginas.
 3. Rode `npm install` e `npm run dev`.
-4. Abra o endereço que o Vite mostrar, normalmente `http://localhost:5173`.
+4. Abra o endereço que o Vite mostrar, normalmente `http://localhost:5173`, entre
+   no painel e cadastre o endpoint MCP e os tokens em **Configurações**.
 
 Para validar a aplicação, rode `npm test` e `npm run build`.
 
@@ -23,19 +27,25 @@ fica por padrão em `./data/ai-memory-manager.sqlite`; esse diretório é criado
 automaticamente e o arquivo não é versionado. Defina `MANAGER_DB_PATH` para
 usar outro caminho, preferencialmente absoluto em uma instalação de servidor.
 
-O `.env` não é versionado. `AI_MEMORY_AUTH_TOKEN` e `AI_MEMORY_ADMIN_TOKEN` são lidos apenas pelo servidor local e nunca enviados ao navegador. Uma chave `aim_...` é suficiente para leitura; renomear/excluir escopos exige o bearer root em `AI_MEMORY_ADMIN_TOKEN`, pois as rotas `/admin/*` são root-only.
+O `.env` não é versionado. O endpoint MCP e os tokens são cadastrados pela
+interface de Configurações e ficam criptografados no SQLite do servidor. O
+bearer de leitura pode ser omitido para nodes sem autenticação; o bearer root
+administrativo é opcional e habilita operações `/admin/*`, como escrita,
+renomeação, exclusão e restauração.
 
-Configuração mínima:
+Configuração mínima do painel:
 
 ```dotenv
-AI_MEMORY_MCP_URL=https://memory.mdeb.com.br/mcp
-AI_MEMORY_AUTH_TOKEN=aim_...
-AI_MEMORY_ADMIN_TOKEN=
-AI_MEMORY_WORKSPACE=nome-exato
-AI_MEMORY_PROJECT=nome-exato
+MEMORA_CONFIG_ENCRYPTION_KEY=chave-gerada-com-openssl-rand-hex-32
 MANAGER_API_PORT=4174
 MANAGER_DB_PATH=./data/ai-memory-manager.sqlite
 ```
+
+Não perca `MEMORA_CONFIG_ENCRYPTION_KEY`: sem ela, os tokens salvos não podem
+ser descriptografados. Fazer backup do banco sem guardar essa chave não basta.
+As antigas variáveis `AI_MEMORY_MCP_URL`, `AI_MEMORY_AUTH_TOKEN`,
+`AI_MEMORY_ADMIN_TOKEN`, `AI_MEMORY_WORKSPACE` e `AI_MEMORY_PROJECT` não são
+mais usadas; cadastre a conexão pela interface.
 
 Se o painel estiver atrás de um proxy HTTPS, defina
 `MANAGER_COOKIE_SECURE=true` para marcar o cookie de sessão como `Secure`.
@@ -43,15 +53,17 @@ Autenticação não substitui HTTPS nem controles de rede: mantenha o backend
 acessível somente por um proxy confiável e não exponha o servidor de
 desenvolvimento do Vite.
 
-Para um servidor ai-memory sem autenticação em loopback, deixe
-`AI_MEMORY_AUTH_TOKEN` vazio. Não use esse modo ao expor o serviço na rede.
+Para um servidor ai-memory sem autenticação em loopback, deixe o bearer de
+leitura vazio. Não use esse modo ao expor o serviço na rede.
 
 ## Dados locais e fonte de verdade
 
 O SQLite guarda o último workspace/projeto do painel, preferências pessoais de
 tema, sessões autenticadas e uma trilha de auditoria das operações
-administrativas, login e escrita, sem armazenar tokens de sessão em texto puro
-nem o conteúdo Markdown das memórias. A conta inicial também fica nesse banco;
+administrativas, login e escrita. Tokens de sessão são armazenados como hash;
+tokens do ai-memory são criptografados com AES-256-GCM usando
+`MEMORA_CONFIG_ENCRYPTION_KEY`. O conteúdo Markdown das memórias não é
+armazenado localmente. A conta inicial também fica nesse banco;
 sua senha é armazenada com scrypt e salt aleatório. A preferência de tema da
 conta é carregada no login; o OOBE usa a aparência do sistema.
 O ai-memory continua sendo a fonte

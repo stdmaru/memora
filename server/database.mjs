@@ -94,6 +94,11 @@ export function readSettings() {
   return Object.fromEntries(database.prepare('SELECT key, value FROM app_settings').all().map(({ key, value }) => [key, JSON.parse(value)]))
 }
 
+export function readSetting(key) {
+  const row = getSetting.get(key)
+  return row ? JSON.parse(row.value) : undefined
+}
+
 export function writeSettings(settings) {
   database.exec('BEGIN IMMEDIATE')
   try {
@@ -104,6 +109,10 @@ export function writeSettings(settings) {
     throw error
   }
   return readSettings()
+}
+
+export function deleteSetting(key) {
+  database.prepare('DELETE FROM app_settings WHERE key = ?').run(key)
 }
 
 export function logAudit({ action, workspace = null, project = null, path = null, outcome, detail = null }) {

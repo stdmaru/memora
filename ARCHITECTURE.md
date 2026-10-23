@@ -48,6 +48,11 @@ com clareza pelo shell.
   a API REST `/api/v1` do [ai-memory](https://github.com/akitaonrails/ai-memory)
   para navegação/leitura. O servidor ai-memory precisa habilitar `--enable-web`
   (isso também monta `/api/v1`).
+- O painel inicia desconectado. O administrador cadastra e testa o endpoint MCP,
+  o bearer de leitura e, opcionalmente, o bearer root em Configurações.
+- Tokens do node são criptografados no SQLite com AES-256-GCM. A chave mestra
+  `MEMORA_CONFIG_ENCRYPTION_KEY` fica no ambiente do servidor do painel; não é
+  uma credencial do node. Perdê-la impede descriptografar os tokens salvos.
 - A API local do painel encaminha operações de escrita e administração com
   escopo validado.
 - VPN reduz a exposição de rede, mas não substitui login nem controle de
@@ -58,12 +63,13 @@ com clareza pelo shell.
 ## Banco local do painel
 
 O backend usa SQLite via `node:sqlite` (Node.js 22.13+) para preferências do
-painel, trilha de auditoria e contas locais. O arquivo fica em `MANAGER_DB_PATH` (padrão
-`./data/ai-memory-manager.sqlite`), com WAL habilitado. Segredos e conteúdo
-de senha em texto puro e conteúdo Markdown não são armazenados no banco local.
-As contas locais usam hash scrypt com salt aleatório. O ai-memory permanece como fonte
-de verdade para escopos, páginas, sessões e checkpoints; não mantemos cópia
-local dessas entidades para evitar cache divergente.
+painel, configuração criptografada da conexão, trilha de auditoria e contas
+locais. O arquivo fica em `MANAGER_DB_PATH` (padrão
+`./data/ai-memory-manager.sqlite`), com WAL habilitado. Tokens de sessão ficam
+como hashes, os tokens do node são criptografados e as senhas locais usam hash
+scrypt com salt aleatório. Conteúdo Markdown não é armazenado localmente.
+O ai-memory permanece como fonte de verdade para escopos, páginas, sessões e
+checkpoints; não mantemos cópia local dessas entidades para evitar cache divergente.
 
 O OOBE pode criar apenas o primeiro administrador e inicia sua sessão após a
 criação. A tela de login autentica essa conta; todas as rotas da API do painel
