@@ -93,13 +93,16 @@ exponha o servidor de desenvolvimento do Vite.
 
 1. A API deve ser a única credencializada para o serviço ai-memory; o browser
    nunca recebe tokens de backend ou acesso direto ao armazenamento.
-2. Login com OIDC/OAuth2, cookies `HttpOnly`, `Secure` e `SameSite`, expiração
-   curta e proteção CSRF para ações mutáveis.
-3. Autorização por usuário e projeto em todas as rotas.
+2. A API local exige sessão autenticada; o cookie é `HttpOnly` e `SameSite=Strict`,
+   e recebe `Secure` quando configurado para HTTPS. Ações mutáveis validam a
+   origem.
+3. Nodes pessoais e seleção de node são isolados por conta. O acesso a
+   workspaces e projetos é delegado às credenciais configuradas no ai-memory.
 4. Registro de auditoria para criar, editar, apagar, restaurar, mover e fundir
    memórias; operações destrutivas devem oferecer recuperação.
-5. Cabeçalhos de segurança, limite de requisições, validação de entrada e
-   proteção contra XSS antes da abertura remota.
+5. O proxy Nginx aplica cabeçalhos de segurança, CSP, limites de corpo e
+   limitação de tentativas de login/setup. A API valida os dados de entrada e
+   limita respostas recebidas dos nodes.
 
 ## Ponte com o ai-memory
 
@@ -124,9 +127,3 @@ O adaptador aplica o escopo selecionado a todas as leituras e não encaminha
 credenciais ao browser. A API REST `/api/v1` do ai-memory é somente leitura;
 escritas e ações administrativas usam rotas `/admin/*` protegidas por bearer
 root ou ferramentas MCP com autorização adequada.
-
-## Próximos incrementos
-
-1. Revisar/limpar sessões com assistência e aprimorar trilha de auditoria.
-2. Preparar a publicação remota atrás de HTTPS e proxy confiável antes de
-   disponibilizar o painel pela VPN.

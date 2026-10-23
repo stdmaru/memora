@@ -1,6 +1,7 @@
-# ai-memory-manager
+# Memora
 
 Interface web para navegar e organizar o serviço [ai-memory](https://github.com/akitaonrails/ai-memory).
+Este projeto é distribuído sob a licença GNU GPL v3.0 somente; consulte [LICENSE](./LICENSE).
 
 ## Desenvolvimento
 
@@ -114,6 +115,11 @@ desenvolvimento do Vite.
 Para um servidor ai-memory sem autenticação em loopback, deixe o bearer de
 leitura vazio. Não use esse modo ao expor o serviço na rede.
 
+O proxy Nginx do Compose limita tentativas de login e configuração inicial e
+rejeita corpos de requisição acima de 7 MB. Ao colocar o serviço atrás de outro
+proxy, configure esse proxy para preservar corretamente os endereços dos
+clientes e terminar TLS.
+
 ## Dados locais e fonte de verdade
 
 O SQLite guarda o último workspace/projeto por node, preferências pessoais de
@@ -143,4 +149,12 @@ outros dados locais do painel.
 - Requer no servidor ai-memory: `AI_MEMORY_ENABLE_WEB=true` (ou `--enable-web`), que habilita o browser somente leitura e a API.
 - Exclusões de memórias e categorias usam as operações administrativas root-only e movem cada página para os checkpoints recuperáveis da Lixeira.
 
-O proxy da API de desenvolvimento escuta apenas em `127.0.0.1`. A publicação remota exige configurar autenticação e um backend de produção; a chave ai-memory não pode ser embutida no frontend estático.
+O proxy da API de desenvolvimento escuta apenas em `127.0.0.1`. Não exponha o
+servidor de desenvolvimento do Vite nem o backend diretamente à internet. Para
+acesso remoto, use o Compose atrás de um proxy HTTPS confiável; a chave do
+ai-memory nunca é embutida no frontend estático.
+
+## Licença
+
+GNU General Public License v3.0 somente (`GPL-3.0-only`). O texto integral está
+em [LICENSE](./LICENSE).

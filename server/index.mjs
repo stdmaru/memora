@@ -8,6 +8,7 @@ const port = Number(process.env.MANAGER_API_PORT || 4174)
 const host = process.env.MANAGER_API_HOST || '127.0.0.1'
 const sessionCookieName = 'memora_session'
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000
+const maxUpstreamResponseBytes = 5 * 1024 * 1024
 const invalidLoginHash = `scrypt$131072$8$1$${Buffer.alloc(16).toString('base64url')}$${Buffer.alloc(64).toString('base64url')}`
 
 class UpstreamError extends Error {
@@ -82,14 +83,52 @@ function userFromRequest(request) {
 }
 
 async function readJson(request, maxBytes = 8192) {
+  const contentLength = Number(request.headers['content-length'])
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    request.resume()
+    throw new UpstreamError('A solicitação excede o tamanho permitido.', 413)
+  }
   const chunks = []
   let size = 0
+  let tooLarge = false
   for await (const chunk of request) {
     size += chunk.length
-    if (size > maxBytes) throw new UpstreamError('A solicitação excede o tamanho permitido.', 413)
-    chunks.push(chunk)
+    if (size > maxBytes) {
+      tooLarge = true
+      chunks.length = 0
+    } else if (!tooLarge) {
+      chunks.push(chunk)
+    }
   }
+  if (tooLarge) throw new UpstreamError('A solicitação excede o tamanho permitido.', 413)
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new UpstreamError('JSON inválido.', 400) }
+}
+
+async function readResponseText(response) {
+  const contentLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(contentLength) && contentLength > maxUpstreamResponseBytes) {
+    await response.body?.cancel()
+    throw new UpstreamError('A resposta do node excede o tamanho permitido.', 502)
+  }
+  if (!response.body) return ''
+  const reader = response.body.getReader()
+  const chunks = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxUpstreamResponseBytes) {
+        await reader.cancel()
+        throw new UpstreamError('A resposta do node excede o tamanho permitido.', 502)
+      }
+      chunks.push(Buffer.from(value))
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 function getAiMemoryBaseUrl(endpoint) {
@@ -128,7 +167,7 @@ async function getAiMemory(path, config) {
     const detail = error instanceof Error && error.name === 'TimeoutError' ? 'Tempo limite excedido ao conectar ao ai-memory.' : 'Não foi possível conectar à API do ai-memory.'
     throw new UpstreamError(detail)
   }
-  const body = await response.text()
+  const body = await readResponseText(response)
   let payload
   try { payload = body ? JSON.parse(body) : null } catch { payload = null }
   if (!response.ok) {
@@ -156,7 +195,7 @@ async function postAdmin(path, payload, config) {
   } catch {
     throw new UpstreamError('Não foi possível conectar à API administrativa do ai-memory.')
   }
-  const body = await response.text()
+  const body = await readResponseText(response)
   let result
   try { result = body ? JSON.parse(body) : null } catch { result = { message: body } }
   if (!response.ok) throw new UpstreamError(result?.error || result?.message || `ai-memory respondeu HTTP ${response.status}.`, response.status)
@@ -177,7 +216,7 @@ async function getAdmin(path, config) {
   } catch {
     throw new UpstreamError('Não foi possível conectar à API administrativa do ai-memory.')
   }
-  const body = await response.text()
+  const body = await readResponseText(response)
   let result
   try { result = body ? JSON.parse(body) : null } catch { result = null }
   if (!response.ok) throw new UpstreamError(result?.error || `ai-memory respondeu HTTP ${response.status}.`, response.status)
@@ -226,7 +265,7 @@ async function probeConnection({ endpoint, readToken, adminToken }) {
       throw new UpstreamError(`O node respondeu HTTP ${response.status} em ${path}.`, 502)
     }
     let payload
-    try { payload = await response.json() } catch { throw new UpstreamError(`O node retornou uma resposta inválida em ${path}.`, 502) }
+    try { payload = JSON.parse(await readResponseText(response)) } catch { throw new UpstreamError(`O node retornou uma resposta inválida em ${path}.`, 502) }
     if (!payload || typeof payload !== 'object') throw new UpstreamError(`O node retornou uma resposta inválida em ${path}.`, 502)
     if (path !== '/identity' && !Array.isArray(payload)) {
       throw new UpstreamError(`O node retornou uma lista inválida em ${path}.`, 502)
@@ -250,7 +289,7 @@ async function probeConnection({ endpoint, readToken, adminToken }) {
     }
     if (!response.ok) throw new UpstreamError(`O node respondeu HTTP ${response.status} ao validar o bearer root.`, 502)
     let checkpoints
-    try { checkpoints = await response.json() } catch {
+    try { checkpoints = JSON.parse(await readResponseText(response)) } catch {
       throw new UpstreamError('O node retornou uma resposta inválida ao validar o bearer root.', 502)
     }
     if (!Array.isArray(checkpoints)) throw new UpstreamError('O node não retornou checkpoints válidos para o bearer root.', 502)
@@ -435,12 +474,10 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'PUT') {
-      const chunks = []
-      for await (const chunk of request) chunks.push(chunk)
-      let body
-      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return send(response, 400, { error: 'JSON inválido.' }) }
+      const body = await readJson(request)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return send(response, 400, { error: 'Configuração inválida.' })
       const updates = {}
-      if ('scope' in (body || {})) {
+      if ('scope' in body) {
         const scope = body.scope
         if (!scope || typeof scope.workspace !== 'string' || typeof scope.project !== 'string' || scope.workspace.length > 200 || scope.project.length > 200) return send(response, 400, { error: 'Escopo inválido.' })
         updates.scope = { workspace: scope.workspace, project: scope.project }
@@ -473,11 +510,9 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/manager/admin' && request.method === 'POST') {
       const config = savedConnectionConfig(user.id)
-      const chunks = []
-      for await (const chunk of request) chunks.push(chunk)
-      let body
-      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return send(response, 400, { error: 'JSON inválido.' }) }
-      const { action, ...payload } = body || {}
+      const body = await readJson(request, 6_500_000)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return send(response, 400, { error: 'Dados administrativos inválidos.' })
+      const { action, ...payload } = body
       const routes = {
         'rename-project': '/admin/rename-project',
         'rename-workspace': '/admin/rename-workspace',
@@ -586,9 +621,9 @@ const server = createServer(async (request, response) => {
 
     return send(response, 404, { error: 'Rota não encontrada.' })
   } catch (error) {
-    const status = error instanceof UpstreamError ? error.status : 502
-    const message = error instanceof Error ? error.message : 'Falha ao consultar o ai-memory.'
-    return send(response, status, { error: message })
+    if (error instanceof UpstreamError) return send(response, error.status, { error: error.message })
+    console.error('Falha inesperada na API do painel.', error)
+    return send(response, 500, { error: 'Ocorreu um erro interno ao processar a solicitação.' })
   }
 })
 

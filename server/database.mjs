@@ -85,9 +85,6 @@ for (const user of usersWithoutPreferences.all()) {
   insertMigratedPreference.run(user.id, legacyTheme)
 }
 
-const getSetting = database.prepare('SELECT value FROM app_settings WHERE key = ?')
-const setSetting = database.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
 const insertAudit = database.prepare(`INSERT INTO audit_log (action, workspace, project, page_path, outcome, detail)
   VALUES (@action, @workspace, @project, @page_path, @outcome, @detail)`)
 const adminExistsQuery = database.prepare("SELECT 1 AS present FROM users WHERE role = 'admin' LIMIT 1")
@@ -156,31 +153,6 @@ export function readNodeScope(userId, nodeId) {
 
 export function writeNodeScope(userId, nodeId, { workspace, project }) {
   setNodeScopeQuery.run(userId, nodeId, workspace, project)
-}
-
-export function readSettings() {
-  return Object.fromEntries(database.prepare('SELECT key, value FROM app_settings').all().map(({ key, value }) => [key, JSON.parse(value)]))
-}
-
-export function readSetting(key) {
-  const row = getSetting.get(key)
-  return row ? JSON.parse(row.value) : undefined
-}
-
-export function writeSettings(settings) {
-  database.exec('BEGIN IMMEDIATE')
-  try {
-    for (const [key, value] of Object.entries(settings)) setSetting.run(key, JSON.stringify(value))
-    database.exec('COMMIT')
-  } catch (error) {
-    database.exec('ROLLBACK')
-    throw error
-  }
-  return readSettings()
-}
-
-export function deleteSetting(key) {
-  database.prepare('DELETE FROM app_settings WHERE key = ?').run(key)
 }
 
 export function logAudit({ action, workspace = null, project = null, path = null, outcome, detail = null }) {

@@ -189,6 +189,15 @@ test('login rejects invalid credentials and logout revokes the session', async (
   assert.equal(newSession.payload.user.theme, 'light')
 })
 
+test('rejects JSON requests larger than the configured limit', async () => {
+  const { response, payload } = await request('auth/login', {
+    method: 'POST',
+    body: { email: 'admin@example.com', padding: 'x'.repeat(9000) },
+  })
+  assert.equal(response.status, 413)
+  assert.equal(payload.error, 'A solicitação excede o tamanho permitido.')
+})
+
 test('state-changing requests reject a foreign origin', async () => {
   const response = await fetch(`${baseUrl}/api/manager/auth/login`, {
     method: 'POST',
