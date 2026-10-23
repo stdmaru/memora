@@ -15,7 +15,10 @@ Este projeto é distribuído sob a licença GNU GPL v3.0 somente; consulte [LICE
    no painel, adicione um node pessoal em **Configurações** e selecione-o para
    conectar.
 
-Para validar a aplicação, rode `npm test` e `npm run build`.
+Para validar a aplicação, rode `npm test` e `npm run build`. A suíte automatizada
+cobre autenticação/sessões, limites e origem das requisições, migração de
+preferências do SQLite, conexão e criptografia de nodes, encaminhamento da API,
+erros/redirects de upstream e proteção das ações administrativas.
 
 ## Docker
 
