@@ -32,28 +32,30 @@ erros/redirects de upstream e proteção das ações administrativas.
    Coloque o resultado em `MEMORA_CONFIG_ENCRYPTION_KEY` no `.env.docker` e mantenha
    essa chave junto do backup do volume. Sem ela, os tokens dos nodes salvos
    não podem ser descriptografados.
-2. Inicie os containers com `docker compose --env-file .env.docker up -d --build`.
+2. Inicie o serviço com `docker compose --env-file .env.docker up -d --build`.
 3. Acesse `http://localhost:8080`.
 
-O serviço `web` serve os arquivos estáticos e encaminha `/api/` para o serviço
-`api`, que não publica sua porta diretamente no host. O SQLite fica no volume
-Docker `memora-data`. Para manter o backend protegido, a porta web publicada
-fica vinculada a `127.0.0.1`; use um proxy HTTPS confiável para acesso remoto e
-defina `MANAGER_COOKIE_SECURE=true` no `.env.docker`.
+O único container serve a interface e a API pelo mesmo processo Node.js; não há
+um serviço web/API separado nem Nginx interno. A API usa a mesma porta e origem
+da interface. O SQLite fica no volume Docker
+`memora-data`. A porta publicada fica vinculada a `127.0.0.1`; use um proxy
+HTTPS confiável para acesso remoto e defina `MANAGER_COOKIE_SECURE=true` no
+`.env.docker`. Configure o proxy externo para encaminhar `Host`,
+`X-Forwarded-Host` e `X-Forwarded-Proto` corretamente, necessários para a
+validação de origem das ações autenticadas.
 
-As imagens de produção separadas da interface e da API são publicadas no GitHub
-Container Registry como `ghcr.io/stdmaru/memora-web` e
-`ghcr.io/stdmaru/memora-api`. Para usar uma versão específica com Compose,
-defina `MEMORA_IMAGE_TAG` no `.env.docker` (por exemplo, `1.2.0`); por padrão, usa
-`latest`. Os pacotes GHCR são privados inicialmente; autentique com `docker
-login ghcr.io` antes de baixar, ou altere a visibilidade do pacote no GitHub
-caso queira disponibilizá-lo publicamente. Para usar as imagens publicadas em
-vez de compilar localmente, rode `docker compose --env-file .env.docker pull` e
-depois `docker compose --env-file .env.docker up -d --no-build`.
+A imagem única é publicada no GitHub Container Registry como
+`ghcr.io/stdmaru/memora`. Para usar uma versão específica com Compose, defina
+`MEMORA_IMAGE_TAG` no `.env.docker` (por exemplo, `1.2.0`); por padrão, usa
+`latest`. O pacote GHCR é privado inicialmente; autentique com `docker login
+ghcr.io` antes de baixar, ou altere sua visibilidade no GitHub caso queira
+disponibilizá-lo publicamente. Para usar a imagem publicada em vez de compilar
+localmente, rode `docker compose --env-file .env.docker pull` e depois
+`docker compose --env-file .env.docker up -d --no-build`.
 
 ## CI e releases
 
-O GitHub Actions executa testes, build do frontend e build dos dois alvos Docker
+O GitHub Actions executa testes, build do frontend e build da imagem Docker única
 em pushes para `dev`/`main` e em pull requests para essas branches. Releases são
 manuais: não há release quando nenhum tag é enviado. Para publicar, atualize a
 versão em `package.json` e `package-lock.json`, faça commit dessa versão na
@@ -70,7 +72,7 @@ git push origin v0.1.0
 
 O workflow roda somente para tags `v*`, valida o formato `vX.Y.Z` e exige que a
 versão do tag seja igual à versão no `package.json`. Depois executa testes e
-build, publica as imagens multi-arquitetura `linux/amd64` e `linux/arm64` no
+build, publica a imagem multi-arquitetura `linux/amd64` e `linux/arm64` no
 GHCR e cria a release do GitHub. As notas da release são geradas pelo GitHub
 com base nos commits e pull requests desde a release anterior; nenhum arquivo
 `CHANGELOG.md` é atualizado automaticamente. Tags de pré-release, como
@@ -129,13 +131,11 @@ configurado para autenticar as chamadas.
 Para um servidor ai-memory sem autenticação em loopback, deixe o bearer de
 leitura vazio. Não use esse modo ao expor o serviço na rede.
 
-O proxy Nginx do Compose limita tentativas de login e configuração inicial e
-rejeita corpos de requisição acima de 7 MB. Ao colocar o serviço atrás de outro
-proxy, o limite por endereço usa o IP que o Nginx observa. Para manter a
-limitação por cliente, configure `real_ip_header` e `set_real_ip_from` somente
-para as redes confiáveis do proxy externo; não confie em cabeçalhos de IP
-encaminhado recebidos de qualquer origem. O proxy externo também deve terminar
-TLS.
+O servidor limita tentativas de login/configuração inicial por endereço e os
+corpos das requisições por endpoint. Se houver um proxy HTTPS externo, configure
+`MANAGER_COOKIE_SECURE=true` e restrinja o acesso direto à porta do serviço. A
+limitação de tentativas considera o endereço de rede observado pelo Node; atrás
+de um proxy, esse endereço pode ser o do próprio proxy.
 
 ## Dados locais e fonte de verdade
 

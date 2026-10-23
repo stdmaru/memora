@@ -62,10 +62,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [api, web]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,7 +76,7 @@ jobs:
       - name: Prepare image tags
         id: image-tags
         env:
-          IMAGE: ghcr.io/${{ github.repository }}-${{ matrix.target }}
+          IMAGE: ghcr.io/${{ github.repository }}
           VERSION: ${{ needs.validate.outputs.version }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
@@ -95,7 +91,6 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.image-tags.outputs.tags }}
@@ -103,8 +98,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ needs.validate.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.target }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+          cache-from: type=gha,scope=memora
+          cache-to: type=gha,mode=max,scope=memora
 
   release:
     needs: [validate, publish]

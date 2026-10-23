@@ -46,6 +46,8 @@ com clareza pelo shell.
 
 ## Integração e implantação
 
+- O Compose executa um único container Node.js que serve a interface estática e
+  a API local no mesmo endereço; o backend não precisa de um proxy web interno.
 - O frontend chama a API local do painel. Ela mantém a chave no servidor e usa
   a API REST `/api/v1` do [ai-memory](https://github.com/akitaonrails/ai-memory)
   para navegação/leitura. O servidor ai-memory precisa habilitar `--enable-web`
@@ -100,9 +102,9 @@ exponha o servidor de desenvolvimento do Vite.
    workspaces e projetos é delegado às credenciais configuradas no ai-memory.
 4. Registro de auditoria para criar, editar, apagar, restaurar, mover e fundir
    memórias; operações destrutivas devem oferecer recuperação.
-5. O proxy Nginx aplica cabeçalhos de segurança, CSP, limites de corpo e
-   limitação de tentativas de login/setup. A API valida os dados de entrada e
-   limita respostas recebidas dos nodes.
+5. O servidor aplica cabeçalhos de segurança e CSP, limita tentativas de
+   login/setup e tamanho de requisições. A API valida dados de entrada e limita
+   respostas recebidas dos nodes.
 
 ## Ponte com o ai-memory
 

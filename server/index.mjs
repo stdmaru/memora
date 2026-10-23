@@ -1,14 +1,21 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
+import { fileURLToPath } from 'node:url'
 import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, findAdminPasswordById, hasAdmin, logAudit, readActiveNodeId, readNodeScope, readSession, updateAdminPassword, updateUserTheme, writeNodeScope } from './database.mjs'
 import { deleteConnectionConfig, readConnectionConfig, readConnectionNode, readConnectionStatus, setActiveConnection, validateEncryptionKey, writeConnectionConfig } from './connection-config.mjs'
 import { hashPassword, verifyPassword } from './passwords.mjs'
+import { serveStatic } from './static-files.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
 const host = process.env.MANAGER_API_HOST || '127.0.0.1'
+const staticRoot = process.env.MANAGER_STATIC_DIR
+  || (process.env.NODE_ENV === 'production' ? fileURLToPath(new URL('../dist/', import.meta.url)) : '')
 const sessionCookieName = 'memora_session'
 const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000
 const maxUpstreamResponseBytes = 5 * 1024 * 1024
+const authAttemptWindowMs = 60 * 1000
+const maxAuthAttemptsPerWindow = 10
+const authAttempts = new Map()
 const invalidLoginHash = `scrypt$131072$8$1$${Buffer.alloc(16).toString('base64url')}$${Buffer.alloc(64).toString('base64url')}`
 
 class UpstreamError extends Error {
@@ -25,6 +32,7 @@ function send(response, status, payload) {
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
     'referrer-policy': 'same-origin',
+    'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
   })
   response.end(JSON.stringify(payload))
 }
@@ -80,6 +88,23 @@ function userFromRequest(request) {
   const session = readSession(tokenHash(token))
   if (!session) return null
   return { id: session.id, name: session.name, email: session.email, role: session.role, theme: session.theme || 'system' }
+}
+
+function authenticationRateLimited(request) {
+  const now = Date.now()
+  for (const [address, attempts] of authAttempts) {
+    if (now - attempts.startedAt >= authAttemptWindowMs) authAttempts.delete(address)
+  }
+  const address = request.socket.remoteAddress || 'unknown'
+  const attempts = authAttempts.get(address)
+  if (attempts && now - attempts.startedAt < authAttemptWindowMs && attempts.count >= maxAuthAttemptsPerWindow) return true
+  if (!attempts || now - attempts.startedAt >= authAttemptWindowMs) {
+    if (authAttempts.size >= 10_000) authAttempts.delete(authAttempts.keys().next().value)
+    authAttempts.set(address, { startedAt: now, count: 1 })
+  } else {
+    attempts.count += 1
+  }
+  return false
 }
 
 async function readJson(request, maxBytes = 8192) {
@@ -311,11 +336,36 @@ function encodedScopePath({ workspace, project }) {
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://127.0.0.1:${port}`)
-  if (!url.pathname.startsWith('/api/manager/')) return send(response, 404, { error: 'Rota não encontrada.' })
+  if (url.pathname === '/healthz' && ['GET', 'HEAD'].includes(request.method || '')) {
+    response.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'same-origin',
+    })
+    return response.end(request.method === 'HEAD' ? undefined : 'ok\n')
+  }
+  if (!url.pathname.startsWith('/api/manager/')) {
+    try {
+      if (await serveStatic(request, response, staticRoot)) return
+    } catch (error) {
+      console.error('Falha ao servir arquivo estático.', error)
+      return send(response, 500, { error: 'Ocorreu um erro interno ao processar a solicitação.' })
+    }
+    return send(response, 404, { error: 'Rota não encontrada.' })
+  }
 
   try {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method || '') && !sameOriginRequest(request)) {
       return send(response, 403, { error: 'Origem da solicitação inválida.' })
+    }
+
+    if (url.pathname === '/api/manager/auth/login' || url.pathname === '/api/manager/setup') {
+      if (request.method === 'POST' && authenticationRateLimited(request)) {
+        response.setHeader('retry-after', '60')
+        return send(response, 429, { error: 'Muitas tentativas. Aguarde um minuto e tente novamente.' })
+      }
     }
 
     if (url.pathname === '/api/manager/setup/status' && request.method === 'GET') {
@@ -627,4 +677,6 @@ const server = createServer(async (request, response) => {
   }
 })
 
-server.listen(port, host, () => console.log(`API do painel escutando em ${host}:${port}`))
+server.requestTimeout = 30_000
+server.headersTimeout = 15_000
+server.listen(port, host, () => console.log(`Memora escutando em ${host}:${port}`))
