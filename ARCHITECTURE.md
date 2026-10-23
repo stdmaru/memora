@@ -66,14 +66,15 @@ específicas do ai-memory, sem expor uma ponte genérica ao browser:
 | Buscar no escopo atual | REST `GET /api/v1/search` |
 | Abrir uma memória | REST `GET /api/v1/.../pages/{path}` |
 | Listar sessões e observações | `memory_read_session_observations` (além da listagem a definir) |
-| Criar ou editar | `memory_write_page` |
+| Criar workspace/projeto com a primeira memória | `memory_write_page` ou `POST /admin/write-page` (a escrita inicial cria o escopo) |
+| Criar ou editar uma memória | `memory_write_page` ou `POST /admin/write-page` |
 | Excluir e recuperar | `memory_delete_page`, `memory_restore_page` |
 | Auditoria de qualidade | `memory_lint` |
 
 O adaptador aplica o escopo selecionado a todas as leituras e não encaminha
-credenciais ao browser. A API REST do ai-memory é somente leitura; ações
-administrativas e mutações continuam fora desta fatia e exigirão controles
-específicos de autorização, confirmação e auditoria.
+credenciais ao browser. A API REST `/api/v1` do ai-memory é somente leitura;
+escritas e ações administrativas usam rotas `/admin/*` protegidas por bearer
+root ou ferramentas MCP com autorização adequada.
 
 ## Próximos incrementos
 

@@ -29,6 +29,7 @@ const setupRequired = ref(false)
 const setupError = ref('')
 const authError = ref('')
 const currentUser = ref<AuthUser | null>(null)
+const scopeCreationNotice = ref('')
 let initializingPanel = false
 let observationRequestId = 0
 let detailRequestId = 0
@@ -52,6 +53,8 @@ const pageDeleteDialog = ref<{ path: string; value: string; busy: boolean; error
 const canAdmin = ref(false)
 type ScopeDialog = { action: 'rename' | 'delete'; kind: 'project' | 'workspace'; current: string; value: string; step: 'form' | 'preview' | 'confirm'; preview: Record<string, unknown> | null; error: string; busy: boolean }
 const scopeDialog = ref<ScopeDialog | null>(null)
+type ScopeCreateDialog = { kind: 'project' | 'workspace'; workspace: string; project: string; path: string; title: string; body: string; error: string; busy: boolean }
+const scopeCreateDialog = ref<ScopeCreateDialog | null>(null)
 const pageEditorOpen = ref(false)
 const pageEditorBody = ref('')
 const pageEditorMode = ref<'code' | 'markdown'>('code')
@@ -576,8 +579,83 @@ function admin(action: string, payload: Record<string, unknown>) {
   return api<Record<string, unknown>>('admin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...payload }) })
 }
 
-function explainScopeCreationLimit() {
-  window.alert('A API REST atual do ai-memory não oferece uma rota administrativa dedicada para criar workspaces ou projetos. Para evitar criar escopos por meio de efeitos colaterais, esta ação ficará indisponível até haver suporte explícito no serviço.')
+function openScopeCreateDialog(kind: 'project' | 'workspace') {
+  if (!canAdmin.value || (kind === 'project' && !selectedWorkspace.value)) return
+  scopeCreationNotice.value = ''
+  scopeCreateDialog.value = {
+    kind,
+    workspace: kind === 'workspace' ? '' : selectedWorkspace.value,
+    project: '',
+    path: 'notes/overview.md',
+    title: 'Visão geral',
+    body: '# Visão geral\n\nDescreva o propósito e o contexto deste projeto.\n',
+    error: '',
+    busy: false,
+  }
+}
+
+function closeScopeCreateDialog() {
+  if (!scopeCreateDialog.value?.busy) scopeCreateDialog.value = null
+}
+
+async function submitScopeCreateDialog() {
+  const dialog = scopeCreateDialog.value
+  if (!dialog || dialog.busy) return
+  dialog.error = ''
+  const workspace = dialog.workspace.trim()
+  const project = dialog.project.trim()
+  const path = dialog.path.trim()
+  const title = dialog.title.trim()
+  const body = dialog.body
+  if (!workspace || !project) { dialog.error = 'Informe o nome do workspace e do projeto.'; return }
+  if (!title) { dialog.error = 'Informe o título da primeira memória.'; return }
+  if (!path || path.startsWith('/') || path.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+    dialog.error = 'Informe um caminho relativo válido, sem segmentos vazios, "." ou "..".'
+    return
+  }
+  if (!body.trim() || body.length > 1_000_000) { dialog.error = 'O conteúdo da primeira memória deve ter texto e no máximo 1 MB.'; return }
+
+  dialog.busy = true
+  let created = false
+  try {
+    const latest = await api<ScopeResponse>('scopes')
+    if (!latest.canAdmin) throw new Error('A criação requer um bearer root configurado no servidor.')
+    if (dialog.kind === 'workspace' && latest.workspaces.some(item => item.workspace_name === workspace)) {
+      dialog.error = 'Esse workspace já existe. Escolha outro nome ou crie o projeto dentro dele.'
+      return
+    }
+    if (dialog.kind === 'project' && !latest.workspaces.some(item => item.workspace_name === workspace)) {
+      dialog.error = 'Esse workspace não existe mais. Atualize a lista e tente novamente.'
+      return
+    }
+    if (latest.projects.some(item => item.workspace_name === workspace && item.project_name === project)) {
+      dialog.error = 'Esse projeto já existe nesse workspace. Escolha outro nome.'
+      return
+    }
+
+    await admin('write-page', { workspace, project, path, title, body, kind: 'fact', tier: 'semantic' })
+    created = true
+    scopeCreateDialog.value = null
+    const refreshed = await api<ScopeResponse>('scopes')
+    workspaces.value = refreshed.workspaces
+    projects.value = refreshed.projects
+    canAdmin.value = refreshed.canAdmin
+    query.value = ''
+    selectedPage.value = null
+    selectedPath.value = ''
+    currentDirectory.value = ''
+    selectedWorkspace.value = workspace
+    selectedProject.value = project
+    activeSection.value = 'Memórias'
+  } catch (error) {
+    if (created) {
+      scopeCreationNotice.value = `O escopo foi criado, mas não foi possível atualizar a lista: ${error instanceof Error ? error.message : 'falha desconhecida.'}`
+    } else {
+      dialog.error = error instanceof Error ? error.message : 'Não foi possível criar o escopo.'
+    }
+  } finally {
+    if (scopeCreateDialog.value === dialog) dialog.busy = false
+  }
 }
 
 function summaryCounts(preview: Record<string, unknown>) {
@@ -739,9 +817,9 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       <a class="brand" href="#"><span class="brand-mark">m</span><span>memora</span></a>
       <div class="scope-switcher">
         <label for="workspace-select">Workspace</label>
-        <div class="scope-control"><select id="workspace-select" v-model="selectedWorkspace" :disabled="workspaces.length === 0" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select><button v-if="canAdmin" class="icon-action" title="Renomear workspace" aria-label="Renomear workspace" :disabled="!selectedWorkspace" @click="manageScope('rename', 'workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></button><button v-if="canAdmin" class="icon-action danger" title="Excluir workspace" aria-label="Excluir workspace" :disabled="!selectedWorkspace" @click="manageScope('delete', 'workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="canAdmin" class="icon-action add" title="Criar workspace" aria-label="Criar workspace" @click="explainScopeCreationLimit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div class="scope-control"><select id="workspace-select" v-model="selectedWorkspace" :disabled="workspaces.length === 0" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select><button v-if="canAdmin" class="icon-action" title="Renomear workspace" aria-label="Renomear workspace" :disabled="!selectedWorkspace" @click="manageScope('rename', 'workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></button><button v-if="canAdmin" class="icon-action danger" title="Excluir workspace" aria-label="Excluir workspace" :disabled="!selectedWorkspace" @click="manageScope('delete', 'workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="canAdmin" class="icon-action add" title="Criar workspace e projeto inicial" aria-label="Criar workspace" @click="openScopeCreateDialog('workspace')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <label for="project-select">Projeto</label>
-        <div class="scope-control"><select id="project-select" v-model="selectedProject" :disabled="workspaceProjects.length === 0" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select><button v-if="canAdmin" class="icon-action" title="Renomear projeto" aria-label="Renomear projeto" :disabled="!selectedProject" @click="manageScope('rename', 'project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></button><button v-if="canAdmin" class="icon-action danger" title="Excluir projeto" aria-label="Excluir projeto" :disabled="!selectedProject" @click="manageScope('delete', 'project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="canAdmin" class="icon-action add" title="Criar projeto" aria-label="Criar projeto" @click="explainScopeCreationLimit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div class="scope-control"><select id="project-select" v-model="selectedProject" :disabled="workspaceProjects.length === 0" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select><button v-if="canAdmin" class="icon-action" title="Renomear projeto" aria-label="Renomear projeto" :disabled="!selectedProject" @click="manageScope('rename', 'project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></button><button v-if="canAdmin" class="icon-action danger" title="Excluir projeto" aria-label="Excluir projeto" :disabled="!selectedProject" @click="manageScope('delete', 'project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button><button v-if="canAdmin" class="icon-action add" title="Criar projeto neste workspace" aria-label="Criar projeto" :disabled="!selectedWorkspace" @click="openScopeCreateDialog('project')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <small v-if="!canAdmin" class="admin-hint">Ações administrativas indisponíveis: configure um bearer root separado.</small>
       </div>
       <nav><button v-for="section in sections" :key="section" class="nav-item" :class="{ active: activeSection === section }" @click="activeSection = section"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><template v-if="section === 'Visão geral'"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></template><template v-else-if="section === 'Memórias'"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></template><template v-else-if="section === 'Sessões'"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></template><template v-else-if="section === 'Relações'"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></template><template v-else-if="section === 'Projetos'"><path d="M4 7h6l2 2h8v10H4zM4 7V5h6l2 2"/></template><template v-else><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></template></svg></span><span class="nav-label">{{ section }}</span><b v-if="section === 'Memórias'">{{ memories.length }}</b></button></nav>
@@ -752,6 +830,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
       <header class="topbar"><label class="search"><span>⌕</span><input v-model="query" type="search" placeholder="Buscar neste projeto…"><kbd>⌘ K</kbd></label><div class="topbar-actions"><div class="theme-control"><button class="theme-button" :aria-expanded="themeMenuOpen" aria-label="Escolher aparência" @click="themeMenuOpen = !themeMenuOpen">◐ <span>{{ theme === 'system' ? 'Sistema' : theme === 'dark' ? 'Escuro' : 'Claro' }}</span></button><div v-if="themeMenuOpen" class="theme-menu"><p>Aparência</p><button :class="{ selected: theme === 'light' }" @click="setTheme('light')">☼ Claro</button><button :class="{ selected: theme === 'dark' }" @click="setTheme('dark')">◐ Escuro</button><button :class="{ selected: theme === 'system' }" @click="setTheme('system')">◒ Sistema <small>automático</small></button></div></div><button class="help-button">?</button><button class="logout-button" @click="logout">Sair</button></div></header>
       <div class="compact-scope"><label>Workspace<select v-model="selectedWorkspace" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select></label><label>Projeto<select v-model="selectedProject" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select></label></div>
       <div class="page-heading"><div><p class="eyebrow"><span v-if="scopesLoading" class="skeleton skeleton-scope" aria-label="Carregando escopo"></span><template v-else>{{ selectedWorkspace }} / {{ selectedProject }}</template></p><h1>{{ activeSection === 'Sessões' ? 'Sessões do projeto' : activeSection === 'Visão geral' ? 'Visão geral' : activeSection === 'Memórias' ? 'Suas memórias' : activeSection }}</h1><p>{{ activeSection === 'Sessões' ? 'Revise conversas e observações capturadas pelas suas IAs.' : activeSection === 'Visão geral' ? 'Um resumo da atividade e da saúde da memória deste projeto.' : activeSection === 'Memórias' ? 'Navegue e explore o conteúdo persistente das suas IAs.' : 'Explore este espaço do ai-memory.' }}</p></div><span class="scope-label"><span v-if="scopesLoading || (activeSection === 'Sessões' && sessionsLoading) || (activeSection !== 'Sessões' && activeSection !== 'Visão geral' && loading)" class="skeleton skeleton-label" aria-label="Carregando total"></span><template v-else>{{ activeSection === 'Sessões' ? `${sessions.length} sessões` : activeSection === 'Visão geral' ? 'resumo do escopo' : `${memories.length} páginas` }}</template></span></div>
+      <p v-if="scopeCreationNotice" class="scope-creation-notice" role="status">{{ scopeCreationNotice }}</p>
       <div v-if="themeError" class="api-error" role="alert"><strong>Não foi possível salvar a aparência.</strong><span>{{ themeError }}</span></div>
       <div v-if="apiError && activeSection !== 'Visão geral'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
       <div v-if="activeSection !== 'Visão geral'" class="overview-cards"><article><i class="violet">◫</i><div><strong v-if="scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading)" class="skeleton skeleton-value" aria-label="Carregando total"></strong><strong v-else>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading) ? 'Carregando…' : 'escopo selecionado' }}</small></article><article><i class="orange">⌘</i><div><strong v-if="scopesLoading" class="skeleton skeleton-value" aria-label="Carregando projeto"></strong><strong v-else>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ scopesLoading ? 'Carregando…' : selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
@@ -823,6 +902,23 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
     </div>
     <div v-if="restoreDialog" class="dialog-backdrop" @click.self="!restoreDialog.busy && (restoreDialog = null)" @keydown.esc="!restoreDialog.busy && (restoreDialog = null)">
       <section class="scope-dialog" role="dialog" aria-modal="true" aria-labelledby="restore-title"><button class="dialog-close" aria-label="Fechar" :disabled="restoreDialog.busy" @click="restoreDialog = null"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.5M4 4v4.5h4.5M12 8v4l3 2"/></svg></div><p class="dialog-eyebrow">{{ restoreDialog.entry.workspace }} / {{ restoreDialog.entry.project }}</p><h2 id="restore-title">Restaurar memória?</h2><p class="dialog-description">O conteúdo de <strong>{{ restoreDialog.entry.path }}</strong> será restaurado do checkpoint anterior à exclusão e voltará a aparecer nas memórias. Se essa página foi recriada depois, a restauração substituirá o conteúdo atual.</p><p v-if="restoreDialog.error" class="dialog-error" role="alert">{{ restoreDialog.error }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="restoreDialog.busy" @click="restoreDialog = null">Cancelar</button><button class="dialog-primary" :disabled="restoreDialog.busy" @click="restoreTrashEntry">{{ restoreDialog.busy ? 'Restaurando…' : 'Restaurar memória' }}</button></footer></section>
+    </div>
+    <div v-if="scopeCreateDialog" class="dialog-backdrop" @click.self="closeScopeCreateDialog" @keydown.esc="closeScopeCreateDialog">
+      <section class="scope-dialog editor-dialog scope-creation-dialog" role="dialog" aria-modal="true" aria-labelledby="scope-create-title">
+        <button class="dialog-close" aria-label="Fechar criação de escopo" :disabled="scopeCreateDialog.busy" @click="closeScopeCreateDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+        <div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v10H4zM4 7V5h6l2 2M12 12v4m-2-2h4"/></svg></div>
+        <p class="dialog-eyebrow">Novo {{ scopeCreateDialog.kind === 'workspace' ? 'workspace' : 'projeto' }}</p>
+        <h2 id="scope-create-title">{{ scopeCreateDialog.kind === 'workspace' ? 'Criar workspace' : 'Criar projeto' }}</h2>
+        <p class="dialog-description">O ai-memory inicializa o escopo ao salvar uma memória. Essa primeira memória será gravada como <strong>{{ scopeCreateDialog.path }}</strong>.</p>
+        <label v-if="scopeCreateDialog.kind === 'workspace'" class="dialog-field">Nome do workspace<input v-model="scopeCreateDialog.workspace" maxlength="200" autocomplete="off" spellcheck="false" placeholder="ex.: minha-equipe"></label>
+        <p v-else class="scope-creation-current">Workspace: <strong>{{ scopeCreateDialog.workspace }}</strong></p>
+        <label class="dialog-field">Nome do projeto<input v-model="scopeCreateDialog.project" maxlength="200" autocomplete="off" spellcheck="false" placeholder="ex.: meu-projeto"></label>
+        <label class="dialog-field">Caminho da primeira memória<input v-model="scopeCreateDialog.path" maxlength="500" autocomplete="off" spellcheck="false" placeholder="notes/overview.md"></label>
+        <label class="dialog-field">Título<input v-model="scopeCreateDialog.title" maxlength="200" autocomplete="off" placeholder="Visão geral"></label>
+        <label class="dialog-field">Conteúdo em Markdown<textarea v-model="scopeCreateDialog.body" class="markdown-editor scope-creation-body" maxlength="1000000" spellcheck="false" placeholder="# Visão geral"></textarea></label>
+        <p v-if="scopeCreateDialog.error" class="dialog-error" role="alert">{{ scopeCreateDialog.error }}</p>
+        <footer class="dialog-actions"><button class="dialog-secondary" :disabled="scopeCreateDialog.busy" @click="closeScopeCreateDialog">Cancelar</button><button class="dialog-primary" :disabled="scopeCreateDialog.busy" @click="submitScopeCreateDialog">{{ scopeCreateDialog.busy ? 'Criando…' : 'Criar escopo e memória' }}</button></footer>
+      </section>
     </div>
     <div v-if="pageEditorOpen" class="dialog-backdrop" @click.self="pageEditorOpen = false" @keydown.esc="pageEditorOpen = false">
       <section class="scope-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="editor-title"><button class="dialog-close" aria-label="Fechar editor" :disabled="pageEditorBusy" @click="pageEditorOpen = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><div class="dialog-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19.5 7.7a2.1 2.1 0 0 0-3-3L5 16.2 4 20Z"/></svg></div><p class="dialog-eyebrow">{{ selectedPage?.path }}</p><h2 id="editor-title">Editar Markdown</h2><p class="dialog-description">As alterações serão gravadas no ai-memory e versionadas pelo serviço.</p><div class="editor-tabs" role="tablist" aria-label="Modo do editor"><button role="tab" :aria-selected="pageEditorMode === 'code'" :class="{ active: pageEditorMode === 'code' }" @click="pageEditorMode = 'code'">Código</button><button role="tab" :aria-selected="pageEditorMode === 'markdown'" :class="{ active: pageEditorMode === 'markdown' }" @click="pageEditorMode = 'markdown'">Prévia Markdown</button></div><textarea v-if="pageEditorMode === 'code'" v-model="pageEditorBody" class="markdown-editor" spellcheck="false" aria-label="Código Markdown"></textarea><div v-else class="markdown-preview" role="tabpanel" v-html="renderMarkdownPreview(pageEditorBody)"></div><p v-if="pageEditorError" class="dialog-error" role="alert">{{ pageEditorError }}</p><footer class="dialog-actions"><button class="dialog-secondary" :disabled="pageEditorBusy" @click="pageEditorOpen = false">Cancelar</button><button class="dialog-primary" :disabled="pageEditorBusy" @click="savePageMarkdown">{{ pageEditorBusy ? 'Salvando…' : 'Salvar Markdown' }}</button></footer></section>

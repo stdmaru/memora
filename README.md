@@ -64,6 +64,7 @@ outros dados locais do painel.
 
 - Implementado: descoberta de workspaces/projetos e leitura/busca de páginas via API REST `/api/v1`.
 - Implementado: listagem de sessões e leitura paginada das observações por sessão.
+- Implementado: criação de workspace/projeto ao gravar a primeira memória via `POST /admin/write-page`; criar um workspace também exige informar seu primeiro projeto.
 - Implementado: renomeação e exclusão administrativa de projetos/workspaces, com prévia de impacto antes de excluir.
 - Requer no servidor ai-memory: `AI_MEMORY_ENABLE_WEB=true` (ou `--enable-web`), que habilita o browser somente leitura e a API.
 - Próximo: revisão/limpeza assistida de sessões e editor Markdown com gravação condicional via MCP.

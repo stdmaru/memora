@@ -1,0 +1,48 @@
+.scope-creation-dialog {
+  width: min(620px, 100%);
+}
+
+.scope-creation-current {
+  margin: 18px 0 5px;
+  color: #77717d;
+  font-size: 12px;
+}
+
+.scope-creation-current strong {
+  color: #393541;
+}
+
+.scope-creation-dialog .scope-creation-body {
+  min-height: 150px;
+  max-height: 30vh;
+  margin-top: 8px;
+}
+
+.scope-creation-notice {
+  margin: -12px 0 20px;
+  padding: 10px 12px;
+  border: 1px solid #edc9bf;
+  border-radius: 8px;
+  background: #fff3ef;
+  color: #9c4937;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+:root[data-theme='dark'] .scope-creation-current,
+:root[data-theme='dark'] .scope-creation-current strong {
+  color: #ded8e4;
+}
+
+:root[data-theme='dark'] .scope-creation-notice {
+  border-color: #70483f;
+  background: #422d2c;
+  color: #f1b8a7;
+}
+
+@media (max-width: 520px) {
+  .scope-creation-dialog .scope-creation-body {
+    min-height: 120px;
+    max-height: 25vh;
+  }
+}
