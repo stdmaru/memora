@@ -123,8 +123,11 @@ leitura vazio. Não use esse modo ao expor o serviço na rede.
 
 O proxy Nginx do Compose limita tentativas de login e configuração inicial e
 rejeita corpos de requisição acima de 7 MB. Ao colocar o serviço atrás de outro
-proxy, configure esse proxy para preservar corretamente os endereços dos
-clientes e terminar TLS.
+proxy, o limite por endereço usa o IP que o Nginx observa. Para manter a
+limitação por cliente, configure `real_ip_header` e `set_real_ip_from` somente
+para as redes confiáveis do proxy externo; não confie em cabeçalhos de IP
+encaminhado recebidos de qualquer origem. O proxy externo também deve terminar
+TLS.
 
 ## Dados locais e fonte de verdade
 
