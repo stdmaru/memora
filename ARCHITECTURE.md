@@ -29,12 +29,19 @@ As contas locais usam hash scrypt com salt aleatório. O ai-memory permanece com
 de verdade para escopos, páginas, sessões e checkpoints; não mantemos cópia
 local dessas entidades para evitar cache divergente.
 
-O OOBE pode criar apenas o primeiro administrador. O painel ainda não tem login;
-não publicar em rede/VPN até concluir autenticação, sessão e proteção das rotas.
-Antes do login, o OOBE usa somente `prefers-color-scheme` (claro/escuro) e não
-salva uma escolha de aparência no navegador. A preferência pessoal da conta é
-armazenada em `user_preferences` e deverá ser carregada após autenticação,
-substituindo o tema do sistema.
+O OOBE pode criar apenas o primeiro administrador e inicia sua sessão após a
+criação. A tela de login autentica essa conta; todas as rotas da API do painel
+exigem uma sessão válida, exceto status do setup e endpoints de login/sessão.
+Tokens aleatórios de sessão são enviados somente em cookie `HttpOnly`,
+`SameSite=Strict`, armazenados no SQLite como SHA-256 e expiram após sete dias.
+Mutations exigem uma origem same-origin. Configure `MANAGER_COOKIE_SECURE=true`
+quando o acesso HTTPS terminar em um proxy reverso.
+
+Antes da autenticação, o OOBE usa somente `prefers-color-scheme`
+(claro/escuro). A preferência pessoal fica em `user_preferences` e é carregada
+depois do login, podendo acompanhar o sistema ou escolher tema claro/escuro.
+Autenticação não substitui HTTPS, proxy confiável ou controles de rede; não
+exponha o servidor de desenvolvimento do Vite.
 
 ## Fronteiras de segurança
 
@@ -73,4 +80,5 @@ específicos de autorização, confirmação e auditoria.
 1. Implementar edição Markdown e escrita condicional pelo MCP.
 2. Conectar relações, lixeira/restauração e auditoria.
 3. Implementar renomeação/exclusão de projetos e workspaces com confirmação e permissões root.
-4. Implementar autenticação do painel antes de disponibilizar acesso pela VPN.
+4. Preparar a publicação remota atrás de HTTPS e proxy confiável antes de
+   disponibilizar o painel pela VPN.

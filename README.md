@@ -9,17 +9,21 @@ Interface web para navegar e organizar o serviço [ai-memory](https://github.com
 3. Rode `npm install` e `npm run dev`.
 4. Abra o endereço que o Vite mostrar, normalmente `http://localhost:5173`.
 
+Para validar a aplicação, rode `npm test` e `npm run build`.
+
 No primeiro acesso, o OOBE solicita nome, e-mail e senha para criar a primeira
-conta de administrador no SQLite. O setup só pode ser concluído uma vez. Esta
-etapa ainda não implementa login; até a próxima etapa de autenticação, mantenha
-o painel apenas em loopback/ambiente local confiável e não o exponha pela VPN.
+conta de administrador no SQLite. O setup só pode ser concluído uma vez e inicia
+uma sessão autenticada. Nos acessos seguintes, o painel exige login; a sessão
+fica em cookie `HttpOnly`, `SameSite=Strict`, com validade de sete dias, e pode
+ser encerrada pelo botão **Sair**. O banco guarda apenas o hash do token da
+sessão.
 
 O servidor usa SQLite embutido no Node.js (Node 22.13 ou mais recente). O banco
 fica por padrão em `./data/ai-memory-manager.sqlite`; esse diretório é criado
 automaticamente e o arquivo não é versionado. Defina `MANAGER_DB_PATH` para
 usar outro caminho, preferencialmente absoluto em uma instalação de servidor.
 
-O `.env` não é versionado. `AI_MEMORY_AUTH_TOKEN` e `AI_MEMORY_ADMIN_TOKEN` são lidos apenas pelo servidor local e nunca enviados ao navegador. Uma chave `aim_...` é suficiente para leitura; renomear/excluir escopos exige o bearer root em `AI_MEMORY_ADMIN_TOKEN`, pois as rotas `/admin/*` são root-only. Mantenha esse painel em loopback confiável enquanto não houver autenticação própria para acesso remoto.
+O `.env` não é versionado. `AI_MEMORY_AUTH_TOKEN` e `AI_MEMORY_ADMIN_TOKEN` são lidos apenas pelo servidor local e nunca enviados ao navegador. Uma chave `aim_...` é suficiente para leitura; renomear/excluir escopos exige o bearer root em `AI_MEMORY_ADMIN_TOKEN`, pois as rotas `/admin/*` são root-only.
 
 Configuração mínima:
 
@@ -33,16 +37,23 @@ MANAGER_API_PORT=4174
 MANAGER_DB_PATH=./data/ai-memory-manager.sqlite
 ```
 
-Para um servidor sem autenticação em loopback, deixe `AI_MEMORY_AUTH_TOKEN` vazio. Não use esse modo ao expor o serviço na rede.
+Se o painel estiver atrás de um proxy HTTPS, defina
+`MANAGER_COOKIE_SECURE=true` para marcar o cookie de sessão como `Secure`.
+Autenticação não substitui HTTPS nem controles de rede: mantenha o backend
+acessível somente por um proxy confiável e não exponha o servidor de
+desenvolvimento do Vite.
+
+Para um servidor ai-memory sem autenticação em loopback, deixe
+`AI_MEMORY_AUTH_TOKEN` vazio. Não use esse modo ao expor o serviço na rede.
 
 ## Dados locais e fonte de verdade
 
 O SQLite guarda o último workspace/projeto do painel, preferências pessoais de
-tema e uma trilha de auditoria das operações administrativas e de escrita, sem armazenar
-tokens nem o conteúdo Markdown das memórias. A conta inicial também fica nesse
-banco; sua senha é armazenada com scrypt e salt aleatório. A preferência de
-tema da conta fica nas preferências pessoais do usuário; o OOBE usa a aparência
-do sistema e o login futuro deverá carregar a preferência pessoal após autenticar.
+tema, sessões autenticadas e uma trilha de auditoria das operações
+administrativas, login e escrita, sem armazenar tokens de sessão em texto puro
+nem o conteúdo Markdown das memórias. A conta inicial também fica nesse banco;
+sua senha é armazenada com scrypt e salt aleatório. A preferência de tema da
+conta é carregada no login; o OOBE usa a aparência do sistema.
 O ai-memory continua sendo a fonte
 de verdade para workspaces, projetos, páginas, sessões e checkpoints da
 lixeira; esses dados são consultados pela API e não duplicados num cache local.
@@ -59,4 +70,3 @@ outros dados locais do painel.
 - Depois: relações, lixeira e trilha de auditoria.
 
 O proxy da API de desenvolvimento escuta apenas em `127.0.0.1`. A publicação remota exige configurar autenticação e um backend de produção; a chave ai-memory não pode ser embutida no frontend estático.
-

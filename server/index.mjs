@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { createInitialAdmin, hasAdmin, logAudit, readSettings, writeSettings } from './database.mjs'
-import { hashPassword } from './passwords.mjs'
+import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, hasAdmin, logAudit, readSession, readSettings, updateUserTheme, writeSettings } from './database.mjs'
+import { hashPassword, verifyPassword } from './passwords.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
 const mcpUrl = process.env.AI_MEMORY_MCP_URL?.replace(/\/+$/, '')
@@ -9,6 +9,9 @@ const token = process.env.AI_MEMORY_AUTH_TOKEN
 const adminToken = process.env.AI_MEMORY_ADMIN_TOKEN
 const preferredWorkspace = process.env.AI_MEMORY_WORKSPACE || ''
 const preferredProject = process.env.AI_MEMORY_PROJECT || ''
+const sessionCookieName = 'memora_session'
+const sessionLifetimeMs = 7 * 24 * 60 * 60 * 1000
+const invalidLoginHash = `scrypt$131072$8$1$${Buffer.alloc(16).toString('base64url')}$${Buffer.alloc(64).toString('base64url')}`
 
 class UpstreamError extends Error {
   constructor(message, status = 502) {
@@ -22,8 +25,63 @@ function send(response, status, payload) {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'same-origin',
   })
   response.end(JSON.stringify(payload))
+}
+
+function cookieValue(request, name) {
+  const cookies = request.headers.cookie?.split(';') || []
+  for (const cookie of cookies) {
+    const separator = cookie.indexOf('=')
+    if (separator < 0 || cookie.slice(0, separator).trim() !== name) continue
+    return cookie.slice(separator + 1).trim()
+  }
+  return ''
+}
+
+function tokenHash(token) {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function cookieHeader(request, value, maxAge) {
+  const secure = process.env.MANAGER_COOKIE_SECURE === 'true' || Boolean(request.socket.encrypted)
+  return `${sessionCookieName}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`
+}
+
+function setSessionCookie(request, response, token) {
+  response.setHeader('set-cookie', cookieHeader(request, token, Math.floor(sessionLifetimeMs / 1000)))
+}
+
+function clearSessionCookie(request, response) {
+  response.setHeader('set-cookie', cookieHeader(request, '', 0))
+}
+
+function sameOriginRequest(request) {
+  const origin = request.headers.origin
+  const forwardedHost = request.headers['x-forwarded-host']
+  const host = typeof forwardedHost === 'string' ? forwardedHost.split(',')[0].trim() : request.headers.host
+  const forwardedProto = request.headers['x-forwarded-proto']
+  const protocol = typeof forwardedProto === 'string'
+    ? forwardedProto.split(',')[0].trim()
+    : request.socket.encrypted ? 'https' : 'http'
+  if (!origin || !host) return false
+  try {
+    const parsedOrigin = new URL(origin)
+    if (parsedOrigin.protocol !== `${protocol}:` || parsedOrigin.host !== host) return false
+    return request.headers['sec-fetch-site'] !== 'cross-site'
+  } catch {
+    return false
+  }
+}
+
+function userFromRequest(request) {
+  const token = cookieValue(request, sessionCookieName)
+  if (!/^[A-Za-z0-9_-]{40,50}$/.test(token)) return null
+  const session = readSession(tokenHash(token))
+  if (!session) return null
+  return { id: session.id, name: session.name, email: session.email, role: session.role, theme: session.theme || 'system' }
 }
 
 async function readJson(request, maxBytes = 8192) {
@@ -130,8 +188,50 @@ const server = createServer(async (request, response) => {
   if (!url.pathname.startsWith('/api/manager/')) return send(response, 404, { error: 'Rota não encontrada.' })
 
   try {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method || '') && !sameOriginRequest(request)) {
+      return send(response, 403, { error: 'Origem da solicitação inválida.' })
+    }
+
     if (url.pathname === '/api/manager/setup/status' && request.method === 'GET') {
       return send(response, 200, { configured: hasAdmin() })
+    }
+
+    if (url.pathname === '/api/manager/auth/session' && request.method === 'GET') {
+      return send(response, 200, { user: userFromRequest(request) })
+    }
+
+    if (url.pathname === '/api/manager/auth/login' && request.method === 'POST') {
+      if (!hasAdmin()) return send(response, 409, { error: 'Conclua a configuração inicial antes de entrar.' })
+      const body = await readJson(request)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return send(response, 400, { error: 'Dados de acesso inválidos.' })
+      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+      const password = typeof body.password === 'string' ? body.password : ''
+      if (!email || email.length > 254 || !password || Buffer.byteLength(password, 'utf8') > 1024) {
+        return send(response, 401, { error: 'E-mail ou senha incorretos.' })
+      }
+      const user = findAdminByEmail(email)
+      const passwordMatches = await verifyPassword(password, user?.password_hash || invalidLoginHash)
+      if (!user || !passwordMatches) {
+        logAudit({ action: 'login', outcome: 'failure' })
+        return send(response, 401, { error: 'E-mail ou senha incorretos.' })
+      }
+      const token = randomBytes(32).toString('base64url')
+      createSession({
+        id: randomUUID(),
+        userId: user.id,
+        tokenHash: tokenHash(token),
+        expiresAt: new Date(Date.now() + sessionLifetimeMs).toISOString(),
+      })
+      setSessionCookie(request, response, token)
+      logAudit({ action: 'login', outcome: 'success' })
+      return send(response, 200, { user: { id: user.id, name: user.name, email: user.email, role: user.role } })
+    }
+
+    if (url.pathname === '/api/manager/auth/logout' && request.method === 'POST') {
+      const token = cookieValue(request, sessionCookieName)
+      if (/^[A-Za-z0-9_-]{40,50}$/.test(token)) deleteSession(tokenHash(token))
+      clearSessionCookie(request, response)
+      return send(response, 200, { loggedOut: true })
     }
 
     if (url.pathname === '/api/manager/setup' && request.method === 'POST') {
@@ -149,10 +249,29 @@ const server = createServer(async (request, response) => {
       if (password !== passwordConfirmation) return send(response, 400, { error: 'As senhas não coincidem.' })
       if (!['light', 'dark', 'system'].includes(theme)) return send(response, 400, { error: 'Preferência de tema inválida.' })
       const passwordHash = await hashPassword(password)
-      const created = createInitialAdmin({ id: randomUUID(), name, email, passwordHash, theme })
+      const id = randomUUID()
+      const created = createInitialAdmin({ id, name, email, passwordHash, theme })
       if (!created) return send(response, 409, { error: 'A configuração inicial já foi concluída.' })
+      const sessionToken = randomBytes(32).toString('base64url')
+      createSession({
+        id: randomUUID(),
+        userId: id,
+        tokenHash: tokenHash(sessionToken),
+        expiresAt: new Date(Date.now() + sessionLifetimeMs).toISOString(),
+      })
+      setSessionCookie(request, response, sessionToken)
       logAudit({ action: 'create-initial-admin', outcome: 'success' })
       return send(response, 201, { configured: true, account: { name, email, role: 'admin' }, preferences: { theme } })
+    }
+
+    const user = userFromRequest(request)
+    if (!user) return send(response, 401, { error: 'Autenticação necessária.' })
+
+    if (url.pathname === '/api/manager/auth/preferences' && request.method === 'PUT') {
+      const body = await readJson(request)
+      if (!body || !['light', 'dark', 'system'].includes(body.theme)) return send(response, 400, { error: 'Preferência de tema inválida.' })
+      const updatedUser = updateUserTheme(user.id, body.theme)
+      return send(response, 200, { theme: updatedUser?.theme || body.theme })
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'GET') {

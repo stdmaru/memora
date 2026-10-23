@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import LoginView from './components/LoginView.vue'
 import SetupView from './components/SetupView.vue'
 
 type Theme = 'light' | 'dark' | 'system'
+type AuthUser = { id: string; name: string; email: string; role: 'admin'; theme: Theme }
 type PageLink = { path: string; title?: string; kind?: string }
 type RelationEntry = { source: Memory; targetPath: string; targetTitle: string; kind: string }
 type Memory = { path: string; title: string; summary: string; kind: string; updated: string; updatedAt?: string; tags: string[]; pinned: boolean; bodyMarkdown?: string; tier?: string; frontmatter?: Record<string, unknown>; links?: PageLink[]; backlinks?: PageLink[] }
@@ -25,6 +27,8 @@ const sections = ['Visão geral', 'Memórias', 'Sessões', 'Relações', 'Projet
 const setupChecked = ref(false)
 const setupRequired = ref(false)
 const setupError = ref('')
+const authError = ref('')
+const currentUser = ref<AuthUser | null>(null)
 let initializingPanel = false
 const relationTypes = ['causes', 'fixes', 'contradicts'] as const
 const memories = ref<Memory[]>([])
@@ -70,6 +74,7 @@ const selectedPage = ref<Memory | null>(null)
 const loading = ref(true)
 const detailLoading = ref(false)
 const apiError = ref('')
+const themeError = ref('')
 const connectionStatus = ref('Conectando…')
 const theme = ref<Theme>('system')
 const themeMenuOpen = ref(false)
@@ -145,6 +150,10 @@ const directoryBreadcrumbs = computed(() => currentDirectory.value ? currentDire
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api/manager/${path}`, options)
   const payload = await response.json()
+  if (response.status === 401 && currentUser.value) {
+    currentUser.value = null
+    authError.value = 'Sua sessão expirou. Entre novamente.'
+  }
   if (!response.ok) throw new Error(payload.error || `Erro HTTP ${response.status}`)
   return payload as T
 }
@@ -435,26 +444,55 @@ async function initializePanel() {
   }
 }
 
-function activateAppTheme() {
-  theme.value = 'system'
-  localStorage.removeItem('memora:theme')
+function activateAppTheme(preference: Theme) {
+  theme.value = preference
   if (!systemTheme) systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
   systemTheme.removeEventListener('change', onSystemThemeChange)
   systemTheme.addEventListener('change', onSystemThemeChange)
   applyTheme()
 }
 
+async function startAuthenticatedSession(user?: AuthUser | null) {
+  const authenticatedUser = user === undefined ? (await api<{ user: AuthUser | null }>('auth/session')).user : user
+  if (!authenticatedUser) throw new Error('Não foi possível iniciar a sessão. Entre novamente.')
+  currentUser.value = authenticatedUser
+  setupChecked.value = true
+  activateAppTheme(authenticatedUser.theme)
+  void api<{ level: string; version: string }>('identity')
+    .then(() => { connectionStatus.value = 'ai-memory conectado' })
+    .catch(() => { connectionStatus.value = 'Sem conexão' })
+  await initializePanel()
+}
+
 async function continueFromSetup() {
   setupRequired.value = false
-  activateAppTheme()
   try {
-    await initializePanel()
-    void api<{ level: string; version: string }>('identity')
-      .then(() => { connectionStatus.value = 'ai-memory conectado' })
-      .catch(() => { connectionStatus.value = 'Sem conexão' })
+    await startAuthenticatedSession()
   } catch (error) {
-    apiError.value = error instanceof Error ? error.message : 'Não foi possível carregar o painel.'
-    connectionStatus.value = 'Sem conexão'
+    const message = error instanceof Error ? error.message : 'Não foi possível iniciar a sessão.'
+    if (currentUser.value) apiError.value = message
+    else authError.value = message
+  }
+}
+
+async function completeLogin() {
+  authError.value = ''
+  try {
+    await startAuthenticatedSession()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Não foi possível abrir o painel.'
+    if (currentUser.value) apiError.value = message
+    else authError.value = message
+  }
+}
+
+async function logout() {
+  try {
+    await api<{ loggedOut: boolean }>('auth/logout', { method: 'POST' })
+    currentUser.value = null
+    window.location.reload()
+  } catch (error) {
+    apiError.value = error instanceof Error ? error.message : 'Não foi possível encerrar a sessão.'
   }
 }
 
@@ -617,6 +655,13 @@ function setTheme(next: Theme) {
   theme.value = next
   applyTheme()
   themeMenuOpen.value = false
+  void api<{ theme: Theme }>('auth/preferences', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ theme: next }),
+  }).then(() => { themeError.value = '' }).catch(error => {
+    themeError.value = error instanceof Error ? error.message : 'Não foi possível salvar a aparência.'
+  })
 }
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
 function retrySetupCheck() { window.location.reload() }
@@ -625,15 +670,15 @@ onMounted(() => {
     try {
       const setupStatus = await api<{ configured: boolean }>('setup/status')
       setupRequired.value = !setupStatus.configured
+      if (!setupRequired.value) {
+        const { user } = await api<{ user: AuthUser | null }>('auth/session')
+        if (user) await startAuthenticatedSession(user)
+      }
       setupChecked.value = true
-      if (setupRequired.value) return
-      activateAppTheme()
-      void api<{ level: string; version: string }>('identity')
-        .then(() => { connectionStatus.value = 'ai-memory conectado' })
-        .catch(() => { connectionStatus.value = 'Sem conexão' })
-      await initializePanel()
     } catch (error) {
-      setupError.value = error instanceof Error ? error.message : 'Não foi possível verificar a configuração inicial.'
+      const message = error instanceof Error ? error.message : 'Não foi possível verificar a configuração inicial.'
+      if (currentUser.value) apiError.value = message
+      else setupError.value = message
       setupChecked.value = true
       connectionStatus.value = 'Sem conexão'
       loading.value = false
@@ -646,6 +691,7 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
 <template>
   <main v-if="setupChecked && setupError" class="setup-screen"><section class="setup-card"><a class="setup-brand" href="#"><span class="setup-mark">m</span><span>memora</span></a><p class="setup-kicker">Inicialização</p><h1>Não foi possível verificar o painel.</h1><p class="setup-copy">{{ setupError }}</p><button class="setup-submit" @click="retrySetupCheck">Tentar novamente</button></section></main>
   <SetupView v-else-if="setupChecked && setupRequired" @continue="continueFromSetup" />
+  <LoginView v-else-if="setupChecked && !currentUser" :message="authError" @login="completeLogin" />
   <main v-else-if="setupChecked" class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="#"><span class="brand-mark">m</span><span>memora</span></a>
@@ -657,13 +703,14 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         <small v-if="!canAdmin" class="admin-hint">Ações administrativas indisponíveis: configure um bearer root separado.</small>
       </div>
       <nav><button v-for="section in sections" :key="section" class="nav-item" :class="{ active: activeSection === section }" @click="activeSection = section"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><template v-if="section === 'Visão geral'"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></template><template v-else-if="section === 'Memórias'"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></template><template v-else-if="section === 'Sessões'"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></template><template v-else-if="section === 'Relações'"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></template><template v-else-if="section === 'Projetos'"><path d="M4 7h6l2 2h8v10H4zM4 7V5h6l2 2"/></template><template v-else><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></template></svg></span><span class="nav-label">{{ section }}</span><b v-if="section === 'Memórias'">{{ memories.length }}</b></button></nav>
-      <div class="sidebar-bottom"><div class="security-note"><span>●</span><div><strong>{{ connectionStatus }}</strong><small>API do ai-memory</small></div></div><button class="nav-item"><span>⚙</span>Configurações</button><div class="user"><i>MR</i><div><strong>Marcio Russo</strong><small>Administrador</small></div><button>···</button></div></div>
+      <div class="sidebar-bottom"><div class="security-note"><span>●</span><div><strong>{{ connectionStatus }}</strong><small>API do ai-memory</small></div></div><button class="nav-item"><span>⚙</span>Configurações</button><div class="user"><i>{{ currentUser?.name.trim().slice(0, 2).toUpperCase() }}</i><div><strong>{{ currentUser?.name }}</strong><small>Administrador</small></div><button>···</button></div></div>
     </aside>
 
     <section class="content">
-      <header class="topbar"><label class="search"><span>⌕</span><input v-model="query" type="search" placeholder="Buscar neste projeto…"><kbd>⌘ K</kbd></label><div class="topbar-actions"><div class="theme-control"><button class="theme-button" :aria-expanded="themeMenuOpen" aria-label="Escolher aparência" @click="themeMenuOpen = !themeMenuOpen">◐ <span>{{ theme === 'system' ? 'Sistema' : theme === 'dark' ? 'Escuro' : 'Claro' }}</span></button><div v-if="themeMenuOpen" class="theme-menu"><p>Aparência</p><button :class="{ selected: theme === 'light' }" @click="setTheme('light')">☼ Claro</button><button :class="{ selected: theme === 'dark' }" @click="setTheme('dark')">◐ Escuro</button><button :class="{ selected: theme === 'system' }" @click="setTheme('system')">◒ Sistema <small>automático</small></button></div></div><button class="help-button">?</button></div></header>
+      <header class="topbar"><label class="search"><span>⌕</span><input v-model="query" type="search" placeholder="Buscar neste projeto…"><kbd>⌘ K</kbd></label><div class="topbar-actions"><div class="theme-control"><button class="theme-button" :aria-expanded="themeMenuOpen" aria-label="Escolher aparência" @click="themeMenuOpen = !themeMenuOpen">◐ <span>{{ theme === 'system' ? 'Sistema' : theme === 'dark' ? 'Escuro' : 'Claro' }}</span></button><div v-if="themeMenuOpen" class="theme-menu"><p>Aparência</p><button :class="{ selected: theme === 'light' }" @click="setTheme('light')">☼ Claro</button><button :class="{ selected: theme === 'dark' }" @click="setTheme('dark')">◐ Escuro</button><button :class="{ selected: theme === 'system' }" @click="setTheme('system')">◒ Sistema <small>automático</small></button></div></div><button class="help-button">?</button><button class="logout-button" @click="logout">Sair</button></div></header>
       <div class="compact-scope"><label>Workspace<select v-model="selectedWorkspace" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select></label><label>Projeto<select v-model="selectedProject" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select></label></div>
       <div class="page-heading"><div><p class="eyebrow">{{ selectedWorkspace }} / {{ selectedProject }}</p><h1>{{ activeSection === 'Sessões' ? 'Sessões do projeto' : activeSection === 'Visão geral' ? 'Visão geral' : activeSection === 'Memórias' ? 'Suas memórias' : activeSection }}</h1><p>{{ activeSection === 'Sessões' ? 'Revise conversas e observações capturadas pelas suas IAs.' : activeSection === 'Visão geral' ? 'Um resumo da atividade e da saúde da memória deste projeto.' : activeSection === 'Memórias' ? 'Navegue e explore o conteúdo persistente das suas IAs.' : 'Explore este espaço do ai-memory.' }}</p></div><span class="scope-label">{{ activeSection === 'Sessões' ? `${sessions.length} sessões` : activeSection === 'Visão geral' ? 'resumo do escopo' : `${memories.length} páginas` }}</span></div>
+      <div v-if="themeError" class="api-error" role="alert"><strong>Não foi possível salvar a aparência.</strong><span>{{ themeError }}</span></div>
       <div v-if="apiError && activeSection !== 'Visão geral'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
       <div v-if="activeSection !== 'Visão geral'" class="overview-cards"><article><i class="violet">◫</i><div><strong>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ activeSection === 'Sessões' ? (sessionsLoading ? 'Carregando…' : 'escopo selecionado') : (loading ? 'Carregando…' : 'escopo selecionado') }}</small></article><article><i class="orange">⌘</i><div><strong>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
       <div v-if="activeSection === 'Visão geral'" class="overview-page">

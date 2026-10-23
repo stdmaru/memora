@@ -56,3 +56,28 @@
   border-color: #423842;
   color: #e6a18a;
 }
+
+.logout-button {
+  padding: 6px 10px;
+  border: 1px solid #e4e1dd;
+  border-radius: 6px;
+  background: #fff;
+  color: #6a6571;
+  font-size: 11px;
+}
+
+.logout-button:hover {
+  background: #f0eeea;
+  color: #4e4955;
+}
+
+:root[data-theme='dark'] .logout-button {
+  border-color: #484451;
+  background: #25232d;
+  color: #d1cbd8;
+}
+
+:root[data-theme='dark'] .logout-button:hover {
+  background: #373440;
+  color: #eee9f2;
+}

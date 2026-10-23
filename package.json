@@ -11,6 +11,7 @@
     "dev:ui": "vite",
     "dev:api": "node --env-file-if-exists=.env server/index.mjs",
     "build": "vue-tsc -b && vite build",
+    "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {

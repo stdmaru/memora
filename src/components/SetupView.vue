@@ -65,10 +65,9 @@ async function createAdmin() {
       <template v-else>
         <p class="setup-kicker">Configuração concluída</p>
         <h1 id="setup-title">Sua conta está pronta.</h1>
-        <p class="setup-copy">A conta de administrador foi salva com segurança. O próximo passo do projeto será habilitar o login e proteger o painel.</p>
+        <p class="setup-copy">Sua conta foi criada com segurança e você já está autenticado.</p>
         <div class="setup-account"><span class="setup-avatar">{{ name.trim().slice(0, 1).toUpperCase() }}</span><span><strong>{{ name }}</strong><small>{{ email }}</small></span><b>ADMIN</b></div>
-        <button class="setup-submit" @click="emit('continue')">Continuar para o painel</button>
-        <p class="setup-security setup-warning">Até o sistema de autenticação ficar pronto, mantenha o painel acessível somente em ambiente local confiável; não o exponha pela VPN.</p>
+        <button class="setup-submit" @click="emit('continue')">Acessar o painel</button>
       </template>
     </section>
     <footer class="setup-footer">Memora <span>·</span> sua memória compartilhada, organizada.</footer>
