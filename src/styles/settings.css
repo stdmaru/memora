@@ -1,0 +1,75 @@
+:root[data-theme='dark'] .settings-card {
+  border-color: #3d3947;
+  background: #24222b;
+}
+
+:root[data-theme='dark'] .settings-card h2,
+:root[data-theme='dark'] .account-details dd,
+:root[data-theme='dark'] .theme-options strong {
+  color: #e8e4ec;
+}
+
+:root[data-theme='dark'] .settings-card header p,
+:root[data-theme='dark'] .account-details dt,
+:root[data-theme='dark'] .theme-options legend,
+:root[data-theme='dark'] .password-form label {
+  color: #b9b3c0;
+}
+
+:root[data-theme='dark'] .account-details > div,
+:root[data-theme='dark'] .connection-help {
+  border-color: #393642;
+}
+
+:root[data-theme='dark'] .theme-options label {
+  border-color: #413d49;
+}
+
+:root[data-theme='dark'] .theme-options label.selected {
+  border-color: #625d9f;
+  background: #302d40;
+}
+
+:root[data-theme='dark'] .theme-options small,
+:root[data-theme='dark'] .security-help,
+:root[data-theme='dark'] .scope-help,
+:root[data-theme='dark'] .connection-help,
+:root[data-theme='dark'] .password-form label small {
+  color: #a59eac;
+}
+
+:root[data-theme='dark'] .password-form input {
+  border-color: #484452;
+  background: #1e1c24;
+  color: #f0ecf2;
+}
+
+:root[data-theme='dark'] .settings-secondary {
+  border-color: #484451;
+  background: #2a2832;
+  color: #d8d2df;
+}
+
+:root[data-theme='dark'] .settings-secondary:hover {
+  background: #373440;
+}
+
+:root[data-theme='dark'] .settings-error {
+  border-color: #62423e;
+  background: #382926;
+  color: #f0a69b;
+}
+
+:root[data-theme='dark'] .settings-success {
+  border-color: #3b5940;
+  background: #263329;
+  color: #a3d3a7;
+}
+
+:root[data-theme='dark'] .settings-icon.violet,
+:root[data-theme='dark'] .settings-icon.orange,
+:root[data-theme='dark'] .settings-icon.green,
+:root[data-theme='dark'] .settings-icon.blue {
+  background: #302d3b;
+  color: #c1bdf5;
+}

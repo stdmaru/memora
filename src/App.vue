@@ -8,6 +8,7 @@ import SessionsSection from './features/sessions/SessionsSection.vue'
 import ProjectsSection from './features/projects/ProjectsSection.vue'
 import TrashSection from './features/trash/TrashSection.vue'
 import RelationsSection from './features/relations/RelationsSection.vue'
+import SettingsSection from './features/settings/SettingsSection.vue'
 import { requestManagerApi } from './services/manager-api'
 import type {
   AuthUser,
@@ -98,6 +99,9 @@ const loading = ref(true)
 const detailLoading = ref(false)
 const apiError = ref('')
 const themeError = ref('')
+const passwordBusy = ref(false)
+const passwordError = ref('')
+const passwordMessage = ref('')
 const connectionStatus = ref('Conectando…')
 const theme = ref<Theme>('system')
 const themeMenuOpen = ref(false)
@@ -1042,6 +1046,24 @@ function setTheme(next: Theme) {
     themeError.value = error instanceof Error ? error.message : 'Não foi possível salvar a aparência.'
   })
 }
+async function changePassword(passwords: { currentPassword: string; newPassword: string; passwordConfirmation: string }) {
+  if (passwordBusy.value) return
+  passwordBusy.value = true
+  passwordError.value = ''
+  passwordMessage.value = ''
+  try {
+    await api<{ changed: boolean }>('auth/password', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(passwords),
+    })
+    passwordMessage.value = 'Senha alterada. As outras sessões foram encerradas.'
+  } catch (error) {
+    passwordError.value = error instanceof Error ? error.message : 'Não foi possível alterar a senha.'
+  } finally {
+    passwordBusy.value = false
+  }
+}
 function onSystemThemeChange() { if (theme.value === 'system') applyTheme() }
 function retrySetupCheck() { window.location.reload() }
 onMounted(() => {
@@ -1082,18 +1104,18 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         <small v-if="!canAdmin" class="admin-hint">Ações administrativas indisponíveis: configure um bearer root separado.</small>
       </div>
       <nav><button v-for="section in sections" :key="section" class="nav-item" :class="{ active: activeSection === section }" @click="activeSection = section"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><template v-if="section === 'Visão geral'"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></template><template v-else-if="section === 'Memórias'"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></template><template v-else-if="section === 'Sessões'"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></template><template v-else-if="section === 'Relações'"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.9 7.5-3.7M8.2 13.1l7.5 3.7"/></template><template v-else-if="section === 'Projetos'"><path d="M4 7h6l2 2h8v10H4zM4 7V5h6l2 2"/></template><template v-else><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></template></svg></span><span class="nav-label">{{ section }}</span><b v-if="section === 'Memórias'">{{ memories.length }}</b></button></nav>
-      <div class="sidebar-bottom"><div class="security-note"><span>●</span><div><strong>{{ connectionStatus }}</strong><small>API do ai-memory</small></div></div><button class="nav-item"><span>⚙</span>Configurações</button><div class="user"><i>{{ currentUser?.name.trim().slice(0, 2).toUpperCase() }}</i><div><strong>{{ currentUser?.name }}</strong><small>Administrador</small></div><button>···</button></div></div>
+      <div class="sidebar-bottom"><div class="security-note"><span>●</span><div><strong>{{ connectionStatus }}</strong><small>API do ai-memory</small></div></div><button class="nav-item" :class="{ active: activeSection === 'Configurações' }" :aria-current="activeSection === 'Configurações' ? 'page' : undefined" @click="activeSection = 'Configurações'"><span>⚙</span>Configurações</button><div class="user"><i>{{ currentUser?.name.trim().slice(0, 2).toUpperCase() }}</i><div><strong>{{ currentUser?.name }}</strong><small>Administrador</small></div><button>···</button></div></div>
     </aside>
 
     <section class="content">
       <header class="topbar"><label class="search"><span>⌕</span><input v-model="query" type="search" placeholder="Buscar neste projeto…"><kbd>⌘ K</kbd></label><div class="topbar-actions"><div class="theme-control"><button class="theme-button" :aria-expanded="themeMenuOpen" aria-label="Escolher aparência" @click="themeMenuOpen = !themeMenuOpen">◐ <span>{{ theme === 'system' ? 'Sistema' : theme === 'dark' ? 'Escuro' : 'Claro' }}</span></button><div v-if="themeMenuOpen" class="theme-menu"><p>Aparência</p><button :class="{ selected: theme === 'light' }" @click="setTheme('light')">☼ Claro</button><button :class="{ selected: theme === 'dark' }" @click="setTheme('dark')">◐ Escuro</button><button :class="{ selected: theme === 'system' }" @click="setTheme('system')">◒ Sistema <small>automático</small></button></div></div><button class="help-button">?</button><button class="logout-button" @click="logout">Sair</button></div></header>
       <div class="compact-scope"><label>Workspace<select v-model="selectedWorkspace" aria-label="Selecionar workspace" @change="changeWorkspace"><option v-for="workspace in workspaces" :key="workspace.workspace_name" :value="workspace.workspace_name">{{ workspace.workspace_name }}</option></select></label><label>Projeto<select v-model="selectedProject" aria-label="Selecionar projeto"><option v-for="project in workspaceProjects" :key="project.project_id" :value="project.project_name">{{ project.project_name }}</option></select></label></div>
-      <div class="page-heading"><div><p class="eyebrow"><span v-if="scopesLoading" class="skeleton skeleton-scope" aria-label="Carregando escopo"></span><template v-else>{{ selectedWorkspace }} / {{ selectedProject }}</template></p><h1>{{ activeSection === 'Sessões' ? 'Sessões do projeto' : activeSection === 'Visão geral' ? 'Visão geral' : activeSection === 'Memórias' ? 'Suas memórias' : activeSection }}</h1><p>{{ activeSection === 'Sessões' ? 'Revise conversas e observações capturadas pelas suas IAs.' : activeSection === 'Visão geral' ? 'Um resumo da atividade e da saúde da memória deste projeto.' : activeSection === 'Memórias' ? 'Navegue e explore o conteúdo persistente das suas IAs.' : 'Explore este espaço do ai-memory.' }}</p></div><span class="scope-label"><span v-if="scopesLoading || (activeSection === 'Sessões' && sessionsLoading) || (activeSection !== 'Sessões' && activeSection !== 'Visão geral' && loading)" class="skeleton skeleton-label" aria-label="Carregando total"></span><template v-else>{{ activeSection === 'Sessões' ? `${sessions.length} sessões` : activeSection === 'Visão geral' ? 'resumo do escopo' : `${memories.length} páginas` }}</template></span></div>
+      <div class="page-heading"><div><p class="eyebrow"><span v-if="scopesLoading" class="skeleton skeleton-scope" aria-label="Carregando escopo"></span><template v-else>{{ selectedWorkspace }} / {{ selectedProject }}</template></p><h1>{{ activeSection === 'Sessões' ? 'Sessões do projeto' : activeSection === 'Visão geral' ? 'Visão geral' : activeSection === 'Memórias' ? 'Suas memórias' : activeSection }}</h1><p>{{ activeSection === 'Sessões' ? 'Revise conversas e observações capturadas pelas suas IAs.' : activeSection === 'Visão geral' ? 'Um resumo da atividade e da saúde da memória deste projeto.' : activeSection === 'Memórias' ? 'Navegue e explore o conteúdo persistente das suas IAs.' : activeSection === 'Configurações' ? 'Gerencie sua conta, aparência e preferências do painel.' : 'Explore este espaço do ai-memory.' }}</p></div><span v-if="activeSection !== 'Configurações'" class="scope-label"><span v-if="scopesLoading || (activeSection === 'Sessões' && sessionsLoading) || (activeSection !== 'Sessões' && activeSection !== 'Visão geral' && loading)" class="skeleton skeleton-label" aria-label="Carregando total"></span><template v-else>{{ activeSection === 'Sessões' ? `${sessions.length} sessões` : activeSection === 'Visão geral' ? 'resumo do escopo' : `${memories.length} páginas` }}</template></span></div>
       <p v-if="scopeCreationNotice" class="scope-creation-notice" role="status">{{ scopeCreationNotice }}</p>
       <p v-if="memoryActionNotice" class="memory-action-notice" role="status">{{ memoryActionNotice }}</p>
-      <div v-if="themeError" class="api-error" role="alert"><strong>Não foi possível salvar a aparência.</strong><span>{{ themeError }}</span></div>
-      <div v-if="apiError && activeSection !== 'Visão geral'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
-      <div v-if="activeSection !== 'Visão geral'" class="overview-cards"><article><i class="violet">◫</i><div><strong v-if="scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading)" class="skeleton skeleton-value" aria-label="Carregando total"></strong><strong v-else>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading) ? 'Carregando…' : 'escopo selecionado' }}</small></article><article><i class="orange">⌘</i><div><strong v-if="scopesLoading" class="skeleton skeleton-value" aria-label="Carregando projeto"></strong><strong v-else>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ scopesLoading ? 'Carregando…' : selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
+      <div v-if="themeError && activeSection !== 'Configurações'" class="api-error" role="alert"><strong>Não foi possível salvar a aparência.</strong><span>{{ themeError }}</span></div>
+      <div v-if="apiError && activeSection !== 'Visão geral' && activeSection !== 'Configurações'" class="api-error"><strong>Não foi possível carregar o ai-memory.</strong><span>{{ apiError }}</span><small>Confira AI_MEMORY_MCP_URL e AI_MEMORY_AUTH_TOKEN. Para listar todos os escopos, habilite AI_MEMORY_ENABLE_WEB=true no servidor ai-memory.</small></div>
+      <div v-if="activeSection !== 'Visão geral' && activeSection !== 'Configurações'" class="overview-cards"><article><i class="violet">◫</i><div><strong v-if="scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading)" class="skeleton skeleton-value" aria-label="Carregando total"></strong><strong v-else>{{ activeSection === 'Sessões' ? sessions.length : memories.length }}</strong><span>{{ activeSection === 'Sessões' ? 'sessões listadas' : 'páginas carregadas' }}</span></div><small>{{ scopesLoading || (activeSection === 'Sessões' ? sessionsLoading : loading) ? 'Carregando…' : 'escopo selecionado' }}</small></article><article><i class="orange">⌘</i><div><strong v-if="scopesLoading" class="skeleton skeleton-value" aria-label="Carregando projeto"></strong><strong v-else>{{ selectedProject || '—' }}</strong><span>projeto atual</span></div><small>{{ scopesLoading ? 'Carregando…' : selectedWorkspace || 'selecione um escopo' }}</small></article><article><i class="green">✓</i><div><strong>{{ connectionStatus.startsWith('ai-memory') ? 'Conectado' : 'Pendente' }}</strong><span>servidor ai-memory</span></div><small>{{ connectionStatus }}</small></article></div>
       <OverviewSection
         v-if="activeSection === 'Visão geral'"
         :overview="overview"
@@ -1103,6 +1125,22 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         :format-date="formatDate"
         @open-page="openOverviewPage"
         @open-memories="activeSection = 'Memórias'"
+      />
+      <SettingsSection
+        v-else-if="activeSection === 'Configurações' && currentUser"
+        :user="currentUser"
+        :theme="theme"
+        :theme-error="themeError"
+        :connection-status="connectionStatus"
+        :workspace="selectedWorkspace"
+        :project="selectedProject"
+        :password-busy="passwordBusy"
+        :password-error="passwordError"
+        :password-message="passwordMessage"
+        @theme-change="setTheme"
+        @change-password="changePassword"
+        @logout="logout"
+        @open-projects="activeSection = 'Projetos'"
       />
       <ProjectsSection
         v-else-if="activeSection === 'Projetos'"

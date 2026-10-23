@@ -5,6 +5,7 @@ import './styles/skeletons.css'
 import './styles/scope-creation.css'
 import './styles/memories.css'
 import './styles/layout.css'
+import './styles/settings.css'
 import App from './App.vue'
 
 createApp(App).mount('#app')

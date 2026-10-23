@@ -74,6 +74,9 @@ const createAdminQuery = database.prepare("INSERT INTO users (id, name, email, p
 const createPreferencesQuery = database.prepare('INSERT INTO user_preferences (user_id, theme) VALUES (?, ?)')
 const readUserPreferencesQuery = database.prepare('SELECT theme FROM user_preferences WHERE user_id = ?')
 const userByEmailQuery = database.prepare("SELECT id, name, email, password_hash, role FROM users WHERE email = ? COLLATE NOCASE AND role = 'admin'")
+const adminPasswordByIdQuery = database.prepare("SELECT password_hash FROM users WHERE id = ? AND role = 'admin'")
+const updateAdminPasswordQuery = database.prepare('UPDATE users SET password_hash = ? WHERE id = ? AND role = \'admin\'')
+const revokeOtherSessionsQuery = database.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?')
 const userByIdQuery = database.prepare(`SELECT users.id, users.name, users.email, users.role, user_preferences.theme
   FROM users LEFT JOIN user_preferences ON user_preferences.user_id = users.id WHERE users.id = ?`)
 const insertSessionQuery = database.prepare('INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)')
@@ -134,6 +137,27 @@ export function readUserPreferences(userId) {
 
 export function findAdminByEmail(email) {
   return userByEmailQuery.get(email)
+}
+
+export function findAdminPasswordById(userId) {
+  return adminPasswordByIdQuery.get(userId)?.password_hash || null
+}
+
+export function updateAdminPassword(userId, passwordHash, currentTokenHash) {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    const result = updateAdminPasswordQuery.run(passwordHash, userId)
+    if (result.changes !== 1) {
+      database.exec('ROLLBACK')
+      return false
+    }
+    revokeOtherSessionsQuery.run(userId, currentTokenHash)
+    database.exec('COMMIT')
+    return true
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function readUser(userId) {

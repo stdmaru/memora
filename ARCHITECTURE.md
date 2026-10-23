@@ -21,6 +21,7 @@ src/
     projects/             Navegação e administração de projetos
     relations/            Relações entre memórias
     sessions/             Sessões e observações
+    settings/             Preferências de aparência, conta e segurança
     trash/                Restauração de memórias
   services/               Acesso à API local do painel
   styles/                 Estilos globais e estilos organizados por área
@@ -32,6 +33,10 @@ compartilhadas. As telas de funcionalidade recebem os dados necessários por
 props e comunicam intenções ao shell por eventos; não fazem chamadas diretas à
 API. Tipos usados por mais de uma área ficam em `types/domain.ts`. A integração
 HTTP do browser passa por `services/manager-api.ts`.
+
+A tela de configurações expõe preferência de tema, dados da conta, status de
+conexão/escopo e alteração de senha. A troca de senha exige a senha atual,
+mantém a sessão usada na alteração e revoga as demais sessões da conta.
 
 Essa divisão é intencionalmente direta: não há camada de estado global nem
 abstrações adicionais enquanto o estado compartilhado puder ser coordenado

@@ -114,6 +114,12 @@ test('login rejects invalid credentials and logout revokes the session', async (
   })
   assert.equal(login.response.status, 200)
   const cookie = cookieFrom(login.response)
+  const otherLogin = await request('auth/login', {
+    method: 'POST',
+    body: { email: 'admin@example.com', password: 'uma senha longa e segura' },
+  })
+  assert.equal(otherLogin.response.status, 200)
+  const otherCookie = cookieFrom(otherLogin.response)
 
   const preference = await request('auth/preferences', {
     method: 'PUT',
@@ -121,6 +127,43 @@ test('login rejects invalid credentials and logout revokes the session', async (
     cookie,
   })
   assert.equal(preference.payload.theme, 'light')
+
+  const wrongCurrentPassword = await request('auth/password', {
+    method: 'PUT',
+    body: {
+      currentPassword: 'senha incorreta',
+      newPassword: 'uma senha ainda mais segura',
+      passwordConfirmation: 'uma senha ainda mais segura',
+    },
+    cookie,
+  })
+  assert.equal(wrongCurrentPassword.response.status, 400)
+  const mismatchedPassword = await request('auth/password', {
+    method: 'PUT',
+    body: {
+      currentPassword: 'uma senha longa e segura',
+      newPassword: 'uma senha ainda mais segura',
+      passwordConfirmation: 'outra senha ainda mais segura',
+    },
+    cookie,
+  })
+  assert.equal(mismatchedPassword.response.status, 400)
+
+  const passwordChange = await request('auth/password', {
+    method: 'PUT',
+    body: {
+      currentPassword: 'uma senha longa e segura',
+      newPassword: 'uma senha ainda mais segura',
+      passwordConfirmation: 'uma senha ainda mais segura',
+    },
+    cookie,
+  })
+  assert.equal(passwordChange.response.status, 200)
+  assert.equal(passwordChange.payload.changed, true)
+  const activeSession = await request('auth/session', { cookie })
+  assert.equal(activeSession.payload.user.email, 'admin@example.com')
+  const revokedSession = await request('auth/session', { cookie: otherCookie })
+  assert.equal(revokedSession.payload.user, null)
 
   const logout = await request('auth/logout', { method: 'POST', cookie })
   assert.equal(logout.response.status, 200)
@@ -136,8 +179,13 @@ test('login rejects invalid credentials and logout revokes the session', async (
     method: 'POST',
     body: { email: 'admin@example.com', password: 'uma senha longa e segura' },
   })
-  assert.equal(relogin.response.status, 200)
-  const newSession = await request('auth/session', { cookie: cookieFrom(relogin.response) })
+  assert.equal(relogin.response.status, 401)
+  const loginWithNewPassword = await request('auth/login', {
+    method: 'POST',
+    body: { email: 'admin@example.com', password: 'uma senha ainda mais segura' },
+  })
+  assert.equal(loginWithNewPassword.response.status, 200)
+  const newSession = await request('auth/session', { cookie: cookieFrom(loginWithNewPassword.response) })
   assert.equal(newSession.payload.user.theme, 'light')
 })
 

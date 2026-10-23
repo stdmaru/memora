@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, hasAdmin, logAudit, readSession, readSettings, updateUserTheme, writeSettings } from './database.mjs'
+import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, findAdminPasswordById, hasAdmin, logAudit, readSession, readSettings, updateAdminPassword, updateUserTheme, writeSettings } from './database.mjs'
 import { hashPassword, verifyPassword } from './passwords.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
@@ -272,6 +272,22 @@ const server = createServer(async (request, response) => {
       if (!body || !['light', 'dark', 'system'].includes(body.theme)) return send(response, 400, { error: 'Preferência de tema inválida.' })
       const updatedUser = updateUserTheme(user.id, body.theme)
       return send(response, 200, { theme: updatedUser?.theme || body.theme })
+    }
+
+    if (url.pathname === '/api/manager/auth/password' && request.method === 'PUT') {
+      const body = await readJson(request)
+      const currentPassword = typeof body?.currentPassword === 'string' ? body.currentPassword : ''
+      const newPassword = typeof body?.newPassword === 'string' ? body.newPassword : ''
+      const passwordConfirmation = typeof body?.passwordConfirmation === 'string' ? body.passwordConfirmation : ''
+      if (!currentPassword || Buffer.byteLength(currentPassword, 'utf8') > 1024) return send(response, 400, { error: 'Informe sua senha atual.' })
+      if (Array.from(newPassword).length < 12 || Buffer.byteLength(newPassword, 'utf8') > 1024) return send(response, 400, { error: 'A nova senha deve ter pelo menos 12 caracteres e no máximo 1024 bytes.' })
+      if (newPassword !== passwordConfirmation) return send(response, 400, { error: 'As novas senhas não coincidem.' })
+      const passwordHash = findAdminPasswordById(user.id)
+      if (!passwordHash || !(await verifyPassword(currentPassword, passwordHash))) return send(response, 400, { error: 'A senha atual está incorreta.' })
+      const updated = updateAdminPassword(user.id, await hashPassword(newPassword), tokenHash(cookieValue(request, sessionCookieName)))
+      if (!updated) return send(response, 404, { error: 'A conta não foi encontrada.' })
+      logAudit({ action: 'change-password', outcome: 'success' })
+      return send(response, 200, { changed: true })
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'GET') {
