@@ -75,6 +75,11 @@ GHCR e cria a release do GitHub. As notas da release são geradas pelo GitHub
 com base nos commits e pull requests desde a release anterior; nenhum arquivo
 `CHANGELOG.md` é atualizado automaticamente. Tags de pré-release, como
 `v0.2.0-rc.1`, são publicadas como pré-release e não alteram a imagem `latest`.
+Se a validação e a publicação das imagens concluírem, mas a criação da
+GitHub Release falhar, primeiro incorpore a correção do workflow em `main`.
+Depois, em **Actions → Release → Run workflow**, escolha a branch `main` e
+informe a tag existente (por exemplo, `v0.1.0`). Esse modo revalida a versão e
+cria somente a GitHub Release com notas geradas; não republica as imagens.
 
 No primeiro acesso, o OOBE solicita nome, e-mail e senha para criar a primeira
 conta de administrador no SQLite. O setup só pode ser concluído uma vez e inicia

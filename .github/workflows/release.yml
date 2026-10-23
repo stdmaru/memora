@@ -3,18 +3,28 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag existente cuja GitHub Release deve ser criada
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   validate:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -26,7 +36,7 @@ jobs:
       - name: Validate release tag
         id: version
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from 'node:fs'
@@ -47,6 +57,7 @@ jobs:
 
   publish:
     needs: validate
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -97,18 +108,22 @@ jobs:
 
   release:
     needs: [validate, publish]
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' || needs.publish.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           fetch-depth: 0
       - name: Create GitHub release with generated notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           if [ "$PRERELEASE" = "true" ]; then
