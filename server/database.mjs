@@ -39,6 +39,27 @@ database.exec(`
     theme TEXT NOT NULL DEFAULT 'system' CHECK (theme IN ('light','dark','system')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
+  CREATE TABLE IF NOT EXISTS ai_memory_nodes (
+    id TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    encrypted_read_token TEXT NOT NULL,
+    encrypted_admin_token TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX IF NOT EXISTS ai_memory_nodes_owner ON ai_memory_nodes(owner_user_id);
+  CREATE TABLE IF NOT EXISTS user_node_preferences (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    active_node_id TEXT REFERENCES ai_memory_nodes(id) ON DELETE SET NULL
+  );
+  CREATE TABLE IF NOT EXISTS user_node_scopes (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES ai_memory_nodes(id) ON DELETE CASCADE,
+    workspace TEXT NOT NULL,
+    project TEXT NOT NULL,
+    PRIMARY KEY (user_id, node_id)
+  );
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -89,6 +110,53 @@ const updateSessionSeenQuery = database.prepare("UPDATE sessions SET last_seen_a
 const deleteSessionQuery = database.prepare('DELETE FROM sessions WHERE token_hash = ?')
 const deleteExpiredSessionsQuery = database.prepare("DELETE FROM sessions WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')")
 const updateUserThemeQuery = database.prepare("UPDATE user_preferences SET theme = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE user_id = ?")
+const nodesForUserQuery = database.prepare('SELECT id, name, endpoint, encrypted_read_token, encrypted_admin_token FROM ai_memory_nodes WHERE owner_user_id = ? ORDER BY name COLLATE NOCASE')
+const nodeForUserQuery = database.prepare('SELECT id, name, endpoint, encrypted_read_token, encrypted_admin_token FROM ai_memory_nodes WHERE owner_user_id = ? AND id = ?')
+const insertNodeQuery = database.prepare('INSERT INTO ai_memory_nodes (id, owner_user_id, name, endpoint, encrypted_read_token, encrypted_admin_token) VALUES (?, ?, ?, ?, ?, ?)')
+const updateNodeQuery = database.prepare('UPDATE ai_memory_nodes SET name = ?, endpoint = ?, encrypted_read_token = ?, encrypted_admin_token = ? WHERE owner_user_id = ? AND id = ?')
+const deleteNodeQuery = database.prepare('DELETE FROM ai_memory_nodes WHERE owner_user_id = ? AND id = ?')
+const activeNodeForUserQuery = database.prepare('SELECT active_node_id FROM user_node_preferences WHERE user_id = ?')
+const setActiveNodeQuery = database.prepare(`INSERT INTO user_node_preferences (user_id, active_node_id) VALUES (?, ?)
+  ON CONFLICT(user_id) DO UPDATE SET active_node_id = excluded.active_node_id`)
+const nodeScopeForUserQuery = database.prepare('SELECT workspace, project FROM user_node_scopes WHERE user_id = ? AND node_id = ?')
+const setNodeScopeQuery = database.prepare(`INSERT INTO user_node_scopes (user_id, node_id, workspace, project) VALUES (?, ?, ?, ?)
+  ON CONFLICT(user_id, node_id) DO UPDATE SET workspace = excluded.workspace, project = excluded.project`)
+
+export function listAiMemoryNodes(userId) {
+  return nodesForUserQuery.all(userId)
+}
+
+export function findAiMemoryNode(userId, nodeId) {
+  return nodeForUserQuery.get(userId, nodeId) || null
+}
+
+export function createAiMemoryNode({ id, userId, name, endpoint, encryptedReadToken, encryptedAdminToken }) {
+  insertNodeQuery.run(id, userId, name, endpoint, encryptedReadToken, encryptedAdminToken)
+}
+
+export function updateAiMemoryNode({ id, userId, name, endpoint, encryptedReadToken, encryptedAdminToken }) {
+  return updateNodeQuery.run(name, endpoint, encryptedReadToken, encryptedAdminToken, userId, id).changes === 1
+}
+
+export function deleteAiMemoryNode(userId, nodeId) {
+  return deleteNodeQuery.run(userId, nodeId).changes === 1
+}
+
+export function readActiveNodeId(userId) {
+  return activeNodeForUserQuery.get(userId)?.active_node_id || ''
+}
+
+export function writeActiveNodeId(userId, nodeId) {
+  setActiveNodeQuery.run(userId, nodeId || null)
+}
+
+export function readNodeScope(userId, nodeId) {
+  return nodeScopeForUserQuery.get(userId, nodeId) || null
+}
+
+export function writeNodeScope(userId, nodeId, { workspace, project }) {
+  setNodeScopeQuery.run(userId, nodeId, workspace, project)
+}
 
 export function readSettings() {
   return Object.fromEntries(database.prepare('SELECT key, value FROM app_settings').all().map(({ key, value }) => [key, JSON.parse(value)]))

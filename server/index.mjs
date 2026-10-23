@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, findAdminPasswordById, hasAdmin, logAudit, readSession, readSettings, updateAdminPassword, updateUserTheme, writeSettings } from './database.mjs'
-import { deleteConnectionConfig, readConnectionConfig, readConnectionStatus, validateEncryptionKey, writeConnectionConfig } from './connection-config.mjs'
+import { createInitialAdmin, createSession, deleteSession, findAdminByEmail, findAdminPasswordById, hasAdmin, logAudit, readActiveNodeId, readNodeScope, readSession, updateAdminPassword, updateUserTheme, writeNodeScope } from './database.mjs'
+import { deleteConnectionConfig, readConnectionConfig, readConnectionNode, readConnectionStatus, setActiveConnection, validateEncryptionKey, writeConnectionConfig } from './connection-config.mjs'
 import { hashPassword, verifyPassword } from './passwords.mjs'
 
 const port = Number(process.env.MANAGER_API_PORT || 4174)
@@ -99,8 +99,8 @@ function getAiMemoryBaseUrl(endpoint) {
   return url.toString().replace(/\/$/, '')
 }
 
-function savedConnectionConfig() {
-  try { return readConnectionConfig() } catch (error) {
+function savedConnectionConfig(userId) {
+  try { return readConnectionConfig(userId) } catch (error) {
     throw new UpstreamError(error instanceof Error ? error.message : 'Não foi possível ler as credenciais do node.', 503)
   }
 }
@@ -111,8 +111,7 @@ function requireEncryptionKey() {
   }
 }
 
-async function getAiMemory(path) {
-  const config = savedConnectionConfig()
+async function getAiMemory(path, config) {
   if (!config) throw new UpstreamError('Conecte um node ai-memory em Configurações para continuar.', 503)
   const token = config.readToken
   const headers = { accept: 'application/json' }
@@ -140,8 +139,7 @@ async function getAiMemory(path) {
   return payload
 }
 
-async function postAdmin(path, payload) {
-  const config = savedConnectionConfig()
+async function postAdmin(path, payload, config) {
   if (!config) throw new UpstreamError('Conecte um node ai-memory em Configurações para continuar.', 503)
   const adminToken = config.adminToken
   if (!adminToken) throw new UpstreamError('Configure o token root nas Configurações para habilitar ações administrativas.', 503)
@@ -164,8 +162,7 @@ async function postAdmin(path, payload) {
   return result
 }
 
-async function getAdmin(path) {
-  const config = savedConnectionConfig()
+async function getAdmin(path, config) {
   if (!config) throw new UpstreamError('Conecte um node ai-memory em Configurações para continuar.', 503)
   const adminToken = config.adminToken
   if (!adminToken) throw new UpstreamError('Configure o token root nas Configurações para acessar a lixeira.', 503)
@@ -380,10 +377,25 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/manager/connection' && request.method === 'GET') {
-      return send(response, 200, readConnectionStatus())
+      return send(response, 200, readConnectionStatus(user.id))
     }
 
-    if (url.pathname === '/api/manager/connection' && request.method === 'PUT') {
+    if (url.pathname === '/api/manager/connection/active' && request.method === 'PUT') {
+      const body = await readJson(request)
+      if (typeof body?.nodeId !== 'string') return send(response, 400, { error: 'Seleção de node inválida.' })
+      if (!setActiveConnection(user.id, body.nodeId)) return send(response, 404, { error: 'O node selecionado não está disponível para esta conta.' })
+      return send(response, 200, readConnectionStatus(user.id))
+    }
+
+    const connectionMatch = url.pathname.match(/^\/api\/manager\/connection\/([A-Za-z0-9-]+)$/)
+    if (connectionMatch && request.method === 'DELETE') {
+      const [, nodeId] = connectionMatch
+      if (!deleteConnectionConfig(user.id, nodeId)) return send(response, 404, { error: 'Node não encontrado.' })
+      return send(response, 200, readConnectionStatus(user.id))
+    }
+
+    const editingConnection = connectionMatch && request.method === 'PUT'
+    if ((url.pathname === '/api/manager/connection' && request.method === 'POST') || editingConnection) {
       const body = await readJson(request, 16384)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return send(response, 400, { error: 'Dados da conexão inválidos.' })
       for (const key of ['readToken', 'adminToken']) {
@@ -392,8 +404,13 @@ const server = createServer(async (request, response) => {
       for (const key of ['clearReadToken', 'clearAdminToken']) {
         if (key in body && typeof body[key] !== 'boolean') return send(response, 400, { error: 'Opção de remoção de token inválida.' })
       }
+      if (typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > 100) {
+        return send(response, 400, { error: 'Informe um nome para o node (até 100 caracteres).' })
+      }
       const endpoint = validateConnectionEndpoint(body?.endpoint)
-      const existing = savedConnectionConfig()
+      const nodeId = editingConnection ? connectionMatch[1] : randomUUID()
+      const existing = editingConnection ? readConnectionNode(user.id, nodeId) : null
+      if (editingConnection && !existing) return send(response, 404, { error: 'Node não encontrado.' })
       const readToken = typeof body?.readToken === 'string' && body.readToken.trim()
         ? body.readToken.trim()
         : body?.clearReadToken ? '' : existing?.readToken || ''
@@ -405,21 +422,15 @@ const server = createServer(async (request, response) => {
       }
       requireEncryptionKey()
       await probeConnection({ endpoint, readToken, adminToken })
-      writeConnectionConfig({ endpoint, readToken, adminToken })
-      logAudit({ action: 'configure-ai-memory', outcome: 'success', detail: endpoint })
-      return send(response, 200, readConnectionStatus())
-    }
-
-    if (url.pathname === '/api/manager/connection' && request.method === 'DELETE') {
-      deleteConnectionConfig()
-      logAudit({ action: 'disconnect-ai-memory', outcome: 'success' })
-      return send(response, 200, readConnectionStatus())
+      writeConnectionConfig({ id: nodeId, userId: user.id, name: body.name.trim(), endpoint, readToken, adminToken })
+      if (!editingConnection) setActiveConnection(user.id, nodeId)
+      logAudit({ action: editingConnection ? 'update-ai-memory-node' : 'add-ai-memory-node', outcome: 'success', detail: body.name.trim() })
+      return send(response, editingConnection ? 200 : 201, readConnectionStatus(user.id))
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'GET') {
-      const settings = readSettings()
-      delete settings.ai_memory_connection
-      return send(response, 200, settings)
+      const nodeId = readActiveNodeId(user.id)
+      return send(response, 200, { scope: nodeId ? readNodeScope(user.id, nodeId) : undefined })
     }
 
     if (url.pathname === '/api/manager/settings' && request.method === 'PUT') {
@@ -434,30 +445,33 @@ const server = createServer(async (request, response) => {
         updates.scope = { workspace: scope.workspace, project: scope.project }
       }
       if (!Object.keys(updates).length) return send(response, 400, { error: 'Nenhuma configuração válida foi enviada.' })
-      const settings = writeSettings(updates)
-      delete settings.ai_memory_connection
-      return send(response, 200, settings)
+      const nodeId = readActiveNodeId(user.id)
+      if (!nodeId) return send(response, 409, { error: 'Selecione um node antes de salvar o escopo.' })
+      writeNodeScope(user.id, nodeId, updates.scope)
+      return send(response, 200, { scope: readNodeScope(user.id, nodeId) })
     }
 
     if (url.pathname === '/api/manager/identity') {
-      const identity = await getAiMemory('/identity')
+      const identity = await getAiMemory('/identity', savedConnectionConfig(user.id))
       return send(response, 200, { ...identity, version: identity?.version || 'conectado' })
     }
 
     if (url.pathname === '/api/manager/scopes') {
+      const config = savedConnectionConfig(user.id)
       const [workspaces, projects] = await Promise.all([
-        getAiMemory('/api/v1/workspaces'),
-        getAiMemory('/api/v1/projects'),
+        getAiMemory('/api/v1/workspaces', config),
+        getAiMemory('/api/v1/projects', config),
       ])
       return send(response, 200, {
         workspaces: Array.isArray(workspaces) ? workspaces : [],
         projects: Array.isArray(projects) ? projects : [],
         preferred: { workspace: '', project: '' },
-        canAdmin: Boolean(readConnectionConfig()?.adminToken),
+        canAdmin: Boolean(config?.adminToken),
       })
     }
 
     if (url.pathname === '/api/manager/admin' && request.method === 'POST') {
+      const config = savedConnectionConfig(user.id)
       const chunks = []
       for await (const chunk of request) chunks.push(chunk)
       let body
@@ -481,7 +495,7 @@ const server = createServer(async (request, response) => {
         if (typeof payload.body !== 'string' || payload.body.length > 1_000_000) return send(response, 400, { error: 'Conteúdo Markdown inválido ou maior que 1 MB.' })
         const writePayload = Object.fromEntries(['workspace', 'project', 'path', 'body', 'title', 'kind', 'tier', 'tags', 'pinned', 'entities', 'abstract', 'relations'].filter(key => key in payload).map(key => [key, payload[key]]))
         try {
-          const result = await postAdmin(routes[action], writePayload)
+          const result = await postAdmin(routes[action], writePayload, config)
           logAudit({ action, workspace, project, path: pagePath, outcome: 'success' })
           return send(response, 200, result)
         } catch (error) {
@@ -490,7 +504,7 @@ const server = createServer(async (request, response) => {
         }
       }
       try {
-        const result = await postAdmin(routes[action], payload)
+        const result = await postAdmin(routes[action], payload, config)
         logAudit({ action, workspace: payload.workspace || null, project: payload.project || null, outcome: 'success' })
         return send(response, 200, result)
       } catch (error) {
@@ -500,7 +514,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/manager/trash' && request.method === 'GET') {
-      const checkpoints = await getAdmin('/admin/checkpoints?limit=100')
+      const checkpoints = await getAdmin('/admin/checkpoints?limit=100', savedConnectionConfig(user.id))
       const ordered = (Array.isArray(checkpoints) ? checkpoints : []).filter(item => item?.oid && item?.summary).sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
       const deleted = new Map()
       for (let index = 0; index < ordered.length; index += 1) {
@@ -521,47 +535,52 @@ const server = createServer(async (request, response) => {
     }
 
     if (url.pathname === '/api/manager/pages') {
+      const config = savedConnectionConfig(user.id)
       const scope = scopeFrom(url)
       const query = url.searchParams.get('q')?.trim()
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 50)))
       const endpoint = query
         ? `/api/v1/search?q=${encodeURIComponent(query)}&workspace=${encodeURIComponent(scope.workspace)}&project=${encodeURIComponent(scope.project)}&limit=${limit}`
         : `${encodedScopePath(scope)}/pages`
-      const pages = await getAiMemory(endpoint)
+      const pages = await getAiMemory(endpoint, config)
       return send(response, 200, Array.isArray(pages) ? pages : [])
     }
 
     if (url.pathname === '/api/manager/overview') {
+      const config = savedConnectionConfig(user.id)
       const scope = scopeFrom(url)
       const endpoint = `${encodedScopePath(scope)}/overview?limit=10`
-      return send(response, 200, await getAiMemory(endpoint))
+      return send(response, 200, await getAiMemory(endpoint, config))
     }
 
     if (url.pathname === '/api/manager/page') {
+      const config = savedConnectionConfig(user.id)
       const scope = scopeFrom(url)
       const pagePath = url.searchParams.get('path')
       if (!pagePath || pagePath.startsWith('/') || pagePath.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
         return send(response, 400, { error: 'Caminho de página inválido.' })
       }
       const encodedPagePath = pagePath.split('/').map(encodeURIComponent).join('/')
-      const page = await getAiMemory(`${encodedScopePath(scope)}/pages/${encodedPagePath}`)
+      const page = await getAiMemory(`${encodedScopePath(scope)}/pages/${encodedPagePath}`, config)
       return send(response, 200, { ...page, body_markdown: page?.body_markdown || '' })
     }
 
     if (url.pathname === '/api/manager/sessions') {
+      const config = savedConnectionConfig(user.id)
       const scope = scopeFrom(url)
       const endpoint = `${encodedScopePath(scope)}/sessions?limit=100&offset=0&include_open=true`
-      const result = await getAiMemory(endpoint)
+      const result = await getAiMemory(endpoint, config)
       return send(response, 200, Array.isArray(result?.sessions) ? result.sessions : [])
     }
 
     if (url.pathname === '/api/manager/session-observations') {
+      const config = savedConnectionConfig(user.id)
       const scope = scopeFrom(url)
       const sessionId = url.searchParams.get('session_id') || ''
       if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return send(response, 400, { error: 'Identificador de sessão inválido.' })
       const offset = Math.max(0, Number(url.searchParams.get('offset') || 0))
       const endpoint = `${encodedScopePath(scope)}/sessions/${encodeURIComponent(sessionId)}/observations?limit=100&offset=${offset}&order=asc&body_max_chars=4000`
-      return send(response, 200, await getAiMemory(endpoint))
+      return send(response, 200, await getAiMemory(endpoint, config))
     }
 
     return send(response, 404, { error: 'Rota não encontrada.' })

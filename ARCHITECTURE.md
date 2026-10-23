@@ -34,8 +34,10 @@ props e comunicam intenções ao shell por eventos; não fazem chamadas diretas 
 API. Tipos usados por mais de uma área ficam em `types/domain.ts`. A integração
 HTTP do browser passa por `services/manager-api.ts`.
 
-A tela de configurações expõe preferência de tema, dados da conta, status de
-conexão/escopo e alteração de senha. A troca de senha exige a senha atual,
+A tela de configurações expõe preferência de tema, dados da conta, seleção de
+node pessoal, status de conexão/escopo e alteração de senha. O cadastro de
+nodes é feito em modal e cada conta mantém seus próprios nodes e escopos. A
+troca de senha exige a senha atual,
 mantém a sessão usada na alteração e revoga as demais sessões da conta.
 
 Essa divisão é intencionalmente direta: não há camada de estado global nem
@@ -48,8 +50,9 @@ com clareza pelo shell.
   a API REST `/api/v1` do [ai-memory](https://github.com/akitaonrails/ai-memory)
   para navegação/leitura. O servidor ai-memory precisa habilitar `--enable-web`
   (isso também monta `/api/v1`).
-- O painel inicia desconectado. O administrador cadastra e testa o endpoint MCP,
-  o bearer de leitura e, opcionalmente, o bearer root em Configurações.
+- O painel inicia sem node selecionado. Cada conta pode cadastrar nodes pessoais
+  e selecionar um deles em Configurações; nodes compartilhados e atribuições
+  individuais ficam para uma etapa futura.
 - Tokens do node são criptografados no SQLite com AES-256-GCM. A chave mestra
   `MEMORA_CONFIG_ENCRYPTION_KEY` fica no ambiente do servidor do painel; não é
   uma credencial do node. Perdê-la impede descriptografar os tokens salvos.
@@ -63,11 +66,12 @@ com clareza pelo shell.
 ## Banco local do painel
 
 O backend usa SQLite via `node:sqlite` (Node.js 22.13+) para preferências do
-painel, configuração criptografada da conexão, trilha de auditoria e contas
+painel, nodes pessoais com credenciais criptografadas, trilha de auditoria e contas
 locais. O arquivo fica em `MANAGER_DB_PATH` (padrão
 `./data/ai-memory-manager.sqlite`), com WAL habilitado. Tokens de sessão ficam
-como hashes, os tokens do node são criptografados e as senhas locais usam hash
-scrypt com salt aleatório. Conteúdo Markdown não é armazenado localmente.
+como hashes, as credenciais dos nodes pessoais são criptografadas e as senhas
+locais usam hash scrypt com salt aleatório. A seleção e o escopo atual são
+isolados por conta e node. Conteúdo Markdown não é armazenado localmente.
 O ai-memory permanece como fonte de verdade para escopos, páginas, sessões e
 checkpoints; não mantemos cópia local dessas entidades para evitar cache divergente.
 

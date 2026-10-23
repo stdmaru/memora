@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { AuthUser, ConnectionStatus, Theme } from '../../types/domain'
+import type { AuthUser, ConnectionNode, ConnectionStatus, Theme } from '../../types/domain'
 
 const props = defineProps<{
   user: AuthUser
@@ -20,8 +20,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   themeChange: [theme: Theme]
-  connectNode: [config: { endpoint: string; readToken: string; adminToken: string; clearReadToken: boolean; clearAdminToken: boolean }]
-  disconnectNode: []
+  connectNode: [config: { id?: string; name: string; endpoint: string; readToken: string; adminToken: string; clearReadToken: boolean; clearAdminToken: boolean }]
+  clearConnectionError: []
+  selectNode: [nodeId: string]
+  removeNode: [nodeId: string]
   changePassword: [passwords: { currentPassword: string; newPassword: string; passwordConfirmation: string }]
   logout: []
   openProjects: []
@@ -30,13 +32,21 @@ const emit = defineEmits<{
 const currentPassword = ref('')
 const newPassword = ref('')
 const passwordConfirmation = ref('')
-const endpoint = ref(props.connection.endpoint)
+const nodeName = ref('')
+const endpoint = ref('')
 const readToken = ref('')
 const adminToken = ref('')
 const clearReadToken = ref(false)
 const clearAdminToken = ref(false)
-const confirmDisconnect = ref(false)
-const canConnect = computed(() => endpoint.value.trim().length > 0 && !props.connectionBusy)
+const connectionDialogOpen = ref(false)
+const editingNodeId = ref('')
+const confirmRemoveNode = ref(false)
+const activeNode = computed(() => props.connection.nodes.find(node => node.id === props.connection.activeNodeId) || null)
+const canConnect = computed(() =>
+  nodeName.value.trim().length > 0
+  && endpoint.value.trim().length > 0
+  && !props.connectionBusy,
+)
 const canSubmitPassword = computed(() =>
   currentPassword.value.length > 0
   && newPassword.value.length >= 12
@@ -51,14 +61,17 @@ watch(() => props.passwordMessage, message => {
   passwordConfirmation.value = ''
 })
 
-watch(() => props.connection.endpoint, value => { endpoint.value = value })
 watch(() => props.connectionMessage, message => {
   if (!message) return
+  connectionDialogOpen.value = false
+  editingNodeId.value = ''
+  nodeName.value = ''
+  endpoint.value = ''
   readToken.value = ''
   adminToken.value = ''
   clearReadToken.value = false
   clearAdminToken.value = false
-  confirmDisconnect.value = false
+  confirmRemoveNode.value = false
 })
 
 function submitPassword() {
@@ -70,9 +83,23 @@ function submitPassword() {
   })
 }
 
+function openConnectionDialog(node?: ConnectionNode) {
+  emit('clearConnectionError')
+  editingNodeId.value = node?.id || ''
+  nodeName.value = node?.name || ''
+  endpoint.value = node?.endpoint || ''
+  readToken.value = ''
+  adminToken.value = ''
+  clearReadToken.value = false
+  clearAdminToken.value = false
+  connectionDialogOpen.value = true
+}
+
 function submitConnection() {
   if (!canConnect.value) return
   emit('connectNode', {
+    ...(editingNodeId.value ? { id: editingNodeId.value } : {}),
+    name: nodeName.value.trim(),
     endpoint: endpoint.value.trim(),
     readToken: readToken.value,
     adminToken: adminToken.value,
@@ -149,58 +176,74 @@ function submitConnection() {
       <article class="settings-card connection-card">
         <header>
           <span class="settings-icon blue">⌘</span>
-          <div><h2>Conexão e escopo</h2><p>Estado do serviço e projeto que será retomado.</p></div>
+          <div><h2>Conexão e escopo</h2><p>Escolha o node ai-memory e o escopo que será retomado.</p></div>
         </header>
         <dl class="account-details">
-          <div><dt>Serviço ai-memory</dt><dd><span class="connection-dot" :class="{ connected: connectionStatus.startsWith('ai-memory') }"></span>{{ connectionStatus }}</dd></div>
+          <div><dt>Status</dt><dd><span class="connection-dot" :class="{ connected: connectionStatus.startsWith('ai-memory') }"></span>{{ connectionStatus }}</dd></div>
+          <div><dt>Node selecionado</dt><dd>{{ activeNode?.name || 'Nenhum node selecionado' }}</dd></div>
           <div><dt>Workspace</dt><dd>{{ workspace || 'Nenhum selecionado' }}</dd></div>
           <div><dt>Projeto</dt><dd>{{ project || 'Nenhum selecionado' }}</dd></div>
         </dl>
-        <p class="scope-help">O escopo atual é salvo automaticamente e selecionado na próxima vez que você entrar.</p>
+        <div class="node-selector">
+          <label for="ai-memory-node">Node ai-memory</label>
+          <div class="node-select-row">
+            <select id="ai-memory-node" :value="connection.activeNodeId" :disabled="connectionBusy" @change="emit('selectNode', ($event.target as HTMLSelectElement).value)">
+              <option value="">Desconectado</option>
+              <option v-for="node in connection.nodes" :key="node.id" :value="node.id">{{ node.name }} — {{ node.endpoint }}</option>
+            </select>
+            <button class="settings-primary" type="button" :disabled="connectionBusy" @click="openConnectionDialog()">Adicionar</button>
+          </div>
+          <div v-if="activeNode" class="node-actions">
+            <button class="settings-secondary" type="button" :disabled="connectionBusy" @click="openConnectionDialog(activeNode)">Editar node</button>
+            <button class="disconnect-button" type="button" :disabled="connectionBusy" @click="confirmRemoveNode = !confirmRemoveNode">{{ confirmRemoveNode ? 'Cancelar remoção' : 'Remover node' }}</button>
+          </div>
+        </div>
+        <p v-if="connectionError && !connectionDialogOpen" class="settings-error" role="alert">{{ connectionError }}</p>
+        <p v-if="connectionMessage" class="settings-success" role="status">{{ connectionMessage }}</p>
+        <div v-if="confirmRemoveNode && activeNode" class="disconnect-confirm" role="group" aria-label="Confirmar remoção do node">
+          <p>O node “{{ activeNode.name }}” e as credenciais criptografadas serão removidos deste painel.</p>
+          <button class="disconnect-button" type="button" :disabled="connectionBusy" @click="emit('removeNode', activeNode.id)">Remover node e credenciais</button>
+        </div>
+        <p class="scope-help">O escopo atual é salvo automaticamente para cada node e selecionado na próxima vez que você entrar.</p>
         <button class="settings-secondary" @click="emit('openProjects')">Ver projetos</button>
         <p class="connection-help">Os tokens são guardados criptografados no servidor e nunca são exibidos novamente.</p>
       </article>
 
-      <article class="settings-card connection-config-card">
+    </div>
+    <div v-if="connectionDialogOpen" class="connection-modal-backdrop" @click.self="connectionDialogOpen = false">
+      <section class="connection-modal" role="dialog" aria-modal="true" aria-labelledby="connection-modal-title">
         <header>
-          <span class="settings-icon blue">⇄</span>
-          <div>
-            <h2>{{ connection.configured ? 'Node ai-memory' : 'Conectar ao ai-memory' }}</h2>
-            <p>{{ connection.configured ? 'Atualize ou teste as credenciais do serviço.' : 'Cadastre o endpoint MCP para começar a usar suas memórias.' }}</p>
-          </div>
-          <span class="node-status" :class="{ connected: connection.configured }">{{ connection.configured ? 'Configurado' : 'Desconectado' }}</span>
+          <div><h2 id="connection-modal-title">{{ editingNodeId ? 'Editar node ai-memory' : 'Adicionar node ai-memory' }}</h2><p>Teste a conexão antes de salvar o node pessoal.</p></div>
+          <button class="modal-close" type="button" aria-label="Fechar" @click="connectionDialogOpen = false">×</button>
         </header>
         <form class="connection-form" @submit.prevent="submitConnection">
+          <label>Nome do node
+            <input v-model="nodeName" type="text" maxlength="100" required placeholder="Ex.: Meu servidor">
+          </label>
           <label>Endpoint MCP
             <input v-model="endpoint" type="url" autocomplete="url" maxlength="2048" required placeholder="https://memory.example.com/mcp">
             <small>Use o endereço HTTP ou HTTPS do endpoint Streamable HTTP.</small>
           </label>
-          <label>Bearer de leitura <span v-if="connection.hasReadToken" class="credential-saved">Token salvo · deixe vazio para manter</span>
-            <input v-model="readToken" type="password" autocomplete="new-password" maxlength="4096" :placeholder="connection.hasReadToken ? '••••••••••••••••' : 'Token de leitura (opcional para nodes sem autenticação)'">
+          <label>Bearer de leitura <span v-if="editingNodeId && activeNode?.hasReadToken" class="credential-saved">Token salvo · deixe vazio para manter</span>
+            <input v-model="readToken" type="password" autocomplete="new-password" maxlength="4096" :placeholder="editingNodeId && activeNode?.hasReadToken ? '••••••••••••••••' : 'Token de leitura (opcional para nodes sem autenticação)'">
           </label>
-          <label>Bearer root administrativo <span v-if="connection.hasAdminToken" class="credential-saved">Token salvo · deixe vazio para manter</span>
+          <label>Bearer administrativo <span v-if="editingNodeId && activeNode?.hasAdminToken" class="credential-saved">Token salvo · deixe vazio para manter</span>
             <input v-model="adminToken" type="password" autocomplete="new-password" maxlength="4096" placeholder="Opcional · habilita escrita e administração">
           </label>
-          <div v-if="connection.hasReadToken || connection.hasAdminToken" class="credential-removal">
-            <label v-if="connection.hasReadToken"><input v-model="clearReadToken" type="checkbox"> Remover token de leitura salvo</label>
-            <label v-if="connection.hasAdminToken"><input v-model="clearAdminToken" type="checkbox"> Remover token root salvo</label>
+          <div v-if="editingNodeId && (activeNode?.hasReadToken || activeNode?.hasAdminToken)" class="credential-removal">
+            <label v-if="activeNode?.hasReadToken"><input v-model="clearReadToken" type="checkbox"> Remover token de leitura salvo</label>
+            <label v-if="activeNode?.hasAdminToken"><input v-model="clearAdminToken" type="checkbox"> Remover token root salvo</label>
           </div>
           <p v-if="connectionError" class="settings-error" role="alert">{{ connectionError }}</p>
-          <p v-if="connectionMessage" class="settings-success" role="status">{{ connectionMessage }}</p>
-          <div class="connection-actions">
+          <p class="connection-help">Tokens criptografados no servidor com <code>MEMORA_CONFIG_ENCRYPTION_KEY</code>.</p>
+          <footer>
+            <button class="settings-secondary" type="button" :disabled="connectionBusy" @click="connectionDialogOpen = false">Cancelar</button>
             <button class="settings-primary" type="submit" :disabled="!canConnect">
-              {{ connectionBusy ? 'Testando conexão…' : connection.configured ? 'Testar e salvar alterações' : 'Testar e conectar' }}
+              {{ connectionBusy ? 'Testando conexão…' : editingNodeId ? 'Testar e salvar alterações' : 'Testar e adicionar' }}
             </button>
-            <button v-if="connection.configured && !confirmDisconnect" class="settings-secondary" type="button" :disabled="connectionBusy" @click="confirmDisconnect = true">Desconectar</button>
-          </div>
-          <div v-if="confirmDisconnect" class="disconnect-confirm" role="group" aria-label="Confirmar desconexão">
-            <p>Isso remove as credenciais salvas e interrompe o acesso aos dados deste node.</p>
-            <button class="settings-secondary" type="button" :disabled="connectionBusy" @click="confirmDisconnect = false">Manter conexão</button>
-            <button class="disconnect-button" type="button" :disabled="connectionBusy" @click="emit('disconnectNode')">Desconectar e remover credenciais</button>
-          </div>
+          </footer>
         </form>
-        <p class="connection-help">Para armazenar os tokens com criptografia, configure <code>MEMORA_CONFIG_ENCRYPTION_KEY</code> no servidor do painel. Gere uma chave com <code>openssl rand -hex 32</code> e mantenha uma cópia segura: perder essa chave impede a leitura dos tokens salvos.</p>
-      </article>
+      </section>
     </div>
   </section>
 </template>
@@ -252,10 +295,21 @@ function submitConnection() {
 .connection-help { border-top: 1px solid #eeece8; margin: 14px 0 0; padding-top: 11px; }
 .connection-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #cc795f; vertical-align: 1px; }
 .connection-dot.connected { background: #65a16b; }
-.connection-config-card { grid-column: 1 / -1; }
-.connection-config-card > header { align-items: flex-start; }
-.node-status { margin-left: auto; border-radius: 999px; padding: 5px 9px; background: #fbece5; color: #a96042; font-size: 10px; font-weight: 600; white-space: nowrap; }
-.node-status.connected { background: #e9f5e8; color: #4e8055; }
+.node-selector { display: grid; gap: 7px; margin: 3px 0 15px; }
+.node-selector > label { color: #68626f; font-size: 11px; font-weight: 600; }
+.node-select-row { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.node-select-row select { flex: 1 1 auto; min-width: 0; border: 1px solid #dedbd8; border-radius: 6px; background: #fff; padding: 9px 10px; color: #393642; font-size: 12px; }
+.node-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.node-actions .disconnect-button { border: 1px solid #d9aaa3; border-radius: 6px; background: #fff; color: #a34436; padding: 8px 11px; font-size: 11px; }
+.connection-modal-backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; overflow-y: auto; background: #17151dcc; padding: 24px; }
+.connection-modal { width: min(100%, 560px); max-height: min(90vh, 800px); overflow-y: auto; border: 1px solid #e7e4df; border-radius: 12px; background: #fffefa; padding: 22px; box-shadow: 0 24px 80px #11182744; }
+.connection-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+.connection-modal > header h2 { margin: 0 0 4px; color: #37333e; font: 600 19px Fraunces, serif; }
+.connection-modal > header p { margin: 0; color: #85808a; font-size: 11px; }
+.modal-close { flex: 0 0 auto; border: 0; background: transparent; color: #77717c; font-size: 24px; line-height: 1; cursor: pointer; }
+.connection-modal .connection-form { grid-template-columns: minmax(0, 1fr); }
+.connection-modal .connection-form > label:first-child { grid-column: auto; }
+.connection-modal .connection-form footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
 .connection-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .connection-form > label { display: grid; align-content: start; gap: 6px; color: #68626f; font-size: 11px; font-weight: 600; }
 .connection-form > label:first-child { grid-column: 1 / -1; }
@@ -265,14 +319,11 @@ function submitConnection() {
 .credential-removal { display: flex; flex-wrap: wrap; gap: 14px; grid-column: 1 / -1; }
 .credential-removal label { display: flex; align-items: center; gap: 7px; color: #77717c; font-size: 10px; }
 .credential-removal input { accent-color: #5d57dd; }
-.connection-actions { display: flex; flex-wrap: wrap; gap: 9px; grid-column: 1 / -1; }
-.connection-actions button:disabled { cursor: wait; opacity: .6; }
 .disconnect-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; grid-column: 1 / -1; border: 1px solid #f0d4cf; border-radius: 7px; background: #fff5f3; padding: 10px; }
 .disconnect-confirm p { flex: 1 1 100%; margin: 0; color: #8e4c43; font-size: 10px; line-height: 1.5; }
 .disconnect-button { border: 1px solid #d9aaa3; border-radius: 6px; background: #fff; color: #a34436; padding: 8px 11px; font-size: 11px; font-weight: 600; }
 .disconnect-button:disabled { cursor: wait; opacity: .6; }
-.connection-config-card > .connection-help { margin-bottom: 0; }
 .connection-help code { border-radius: 4px; background: #f0eeea; padding: 2px 4px; font: 10px 'DM Mono'; }
-@media (max-width: 760px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } .settings-card { padding: 16px; } .connection-config-card { grid-column: auto; } }
-@media (max-width: 520px) { .connection-form { grid-template-columns: minmax(0, 1fr); } .connection-form > label:first-child { grid-column: auto; } .credential-removal,.connection-actions { grid-column: auto; } .node-status { font-size: 9px; } }
+@media (max-width: 760px) { .settings-grid { grid-template-columns: minmax(0, 1fr); } .settings-card { padding: 16px; } }
+@media (max-width: 520px) { .connection-form { grid-template-columns: minmax(0, 1fr); } .connection-form > label:first-child { grid-column: auto; } .credential-removal { grid-column: auto; } .connection-modal-backdrop { padding: 12px; } .connection-modal { padding: 17px; } }
 </style>

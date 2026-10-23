@@ -1,7 +1,14 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { deleteSetting, readSetting, writeSettings } from './database.mjs'
+import {
+  createAiMemoryNode,
+  deleteAiMemoryNode,
+  findAiMemoryNode,
+  listAiMemoryNodes,
+  readActiveNodeId,
+  writeActiveNodeId,
+  updateAiMemoryNode,
+} from './database.mjs'
 
-const settingKey = 'ai_memory_connection'
 const encryptionKeyEnvironment = 'MEMORA_CONFIG_ENCRYPTION_KEY'
 const additionalData = Buffer.from('memora-ai-memory-connection-v1')
 
@@ -39,37 +46,55 @@ function decrypt(value) {
   ]).toString('utf8')
 }
 
-export function readConnectionConfig() {
-  const saved = readSetting(settingKey)
+export function readConnectionConfig(userId) {
+  const activeNodeId = readActiveNodeId(userId)
+  return activeNodeId ? readConnectionNode(userId, activeNodeId) : null
+}
+
+export function readConnectionNode(userId, nodeId) {
+  const saved = findAiMemoryNode(userId, nodeId)
   if (!saved) return null
   return {
+    id: saved.id,
+    name: saved.name,
     endpoint: saved.endpoint,
-    readToken: saved.encryptedReadToken ? decrypt(saved.encryptedReadToken) : '',
-    adminToken: saved.encryptedAdminToken ? decrypt(saved.encryptedAdminToken) : '',
+    readToken: saved.encrypted_read_token ? decrypt(saved.encrypted_read_token) : '',
+    adminToken: saved.encrypted_admin_token ? decrypt(saved.encrypted_admin_token) : '',
   }
 }
 
-export function readConnectionStatus() {
-  const saved = readSetting(settingKey)
+export function readConnectionStatus(userId) {
+  const nodes = listAiMemoryNodes(userId).map(node => ({
+    id: node.id,
+    name: node.name,
+    endpoint: node.endpoint,
+    hasReadToken: Boolean(node.encrypted_read_token),
+    hasAdminToken: Boolean(node.encrypted_admin_token),
+  }))
   return {
-    configured: Boolean(saved?.endpoint),
-    endpoint: saved?.endpoint || '',
-    hasReadToken: Boolean(saved?.encryptedReadToken),
-    hasAdminToken: Boolean(saved?.encryptedAdminToken),
+    nodes,
+    activeNodeId: readActiveNodeId(userId),
   }
 }
 
-export function writeConnectionConfig({ endpoint, readToken, adminToken }) {
+export function writeConnectionConfig({ id, userId, name, endpoint, readToken, adminToken }) {
   validateEncryptionKey()
-  writeSettings({
-    [settingKey]: {
-      endpoint,
-      encryptedReadToken: readToken ? encrypt(readToken) : '',
-      encryptedAdminToken: adminToken ? encrypt(adminToken) : '',
-    },
-  })
+  const encryptedReadToken = readToken ? encrypt(readToken) : ''
+  const encryptedAdminToken = adminToken ? encrypt(adminToken) : ''
+  const existing = findAiMemoryNode(userId, id)
+  if (existing) {
+    return updateAiMemoryNode({ id, userId, name, endpoint, encryptedReadToken, encryptedAdminToken })
+  }
+  createAiMemoryNode({ id, userId, name, endpoint, encryptedReadToken, encryptedAdminToken })
+  return true
 }
 
-export function deleteConnectionConfig() {
-  deleteSetting(settingKey)
+export function setActiveConnection(userId, nodeId) {
+  if (nodeId && !findAiMemoryNode(userId, nodeId)) return false
+  writeActiveNodeId(userId, nodeId)
+  return true
+}
+
+export function deleteConnectionConfig(userId, nodeId) {
+  return deleteAiMemoryNode(userId, nodeId)
 }

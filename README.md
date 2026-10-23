@@ -11,7 +11,8 @@ Interface web para navegar e organizar o serviço [ai-memory](https://github.com
    ou `--enable-web`). O painel usa `/api/v1` para descobrir escopos e ler páginas.
 3. Rode `npm install` e `npm run dev`.
 4. Abra o endereço que o Vite mostrar, normalmente `http://localhost:5173`, entre
-   no painel e cadastre o endpoint MCP e os tokens em **Configurações**.
+   no painel, adicione um node pessoal em **Configurações** e selecione-o para
+   conectar.
 
 Para validar a aplicação, rode `npm test` e `npm run build`.
 
@@ -27,11 +28,12 @@ fica por padrão em `./data/ai-memory-manager.sqlite`; esse diretório é criado
 automaticamente e o arquivo não é versionado. Defina `MANAGER_DB_PATH` para
 usar outro caminho, preferencialmente absoluto em uma instalação de servidor.
 
-O `.env` não é versionado. O endpoint MCP e os tokens são cadastrados pela
-interface de Configurações e ficam criptografados no SQLite do servidor. O
-bearer de leitura pode ser omitido para nodes sem autenticação; o bearer root
-administrativo é opcional e habilita operações `/admin/*`, como escrita,
-renomeação, exclusão e restauração.
+O `.env` não é versionado. Cada conta pode cadastrar nodes pessoais pela
+interface de Configurações. Os endpoints e tokens ficam no SQLite do servidor;
+os tokens são criptografados. Nodes públicos e atribuições de acesso por usuário
+ainda não estão disponíveis. O bearer de leitura pode ser omitido para nodes sem
+autenticação; o bearer root administrativo é opcional e habilita operações
+`/admin/*`, como escrita, renomeação, exclusão e restauração.
 
 Configuração mínima do painel:
 
@@ -45,7 +47,7 @@ Não perca `MEMORA_CONFIG_ENCRYPTION_KEY`: sem ela, os tokens salvos não podem
 ser descriptografados. Fazer backup do banco sem guardar essa chave não basta.
 As antigas variáveis `AI_MEMORY_MCP_URL`, `AI_MEMORY_AUTH_TOKEN`,
 `AI_MEMORY_ADMIN_TOKEN`, `AI_MEMORY_WORKSPACE` e `AI_MEMORY_PROJECT` não são
-mais usadas; cadastre a conexão pela interface.
+mais usadas; cadastre e selecione nodes pela interface.
 
 Se o painel estiver atrás de um proxy HTTPS, defina
 `MANAGER_COOKIE_SECURE=true` para marcar o cookie de sessão como `Secure`.
@@ -58,7 +60,7 @@ leitura vazio. Não use esse modo ao expor o serviço na rede.
 
 ## Dados locais e fonte de verdade
 
-O SQLite guarda o último workspace/projeto do painel, preferências pessoais de
+O SQLite guarda o último workspace/projeto por node, preferências pessoais de
 tema, sessões autenticadas e uma trilha de auditoria das operações
 administrativas, login e escrita. Tokens de sessão são armazenados como hash;
 tokens do ai-memory são criptografados com AES-256-GCM usando

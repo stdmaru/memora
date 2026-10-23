@@ -108,13 +108,14 @@ const theme = ref<Theme>('system')
 const themeMenuOpen = ref(false)
 const persistedSettings = ref<{ scope?: { workspace: string; project: string } }>({})
 const settingsReady = ref(false)
-const connectionConfig = ref<ConnectionStatus>({ configured: false, endpoint: '', hasReadToken: false, hasAdminToken: false })
+const connectionConfig = ref<ConnectionStatus>({ nodes: [], activeNodeId: '' })
 const nodeConfigBusy = ref(false)
 const nodeConfigError = ref('')
 const nodeConfigMessage = ref('')
 let systemTheme: MediaQueryList | undefined
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 const workspaceProjects = computed(() => projects.value.filter(project => project.workspace_name === selectedWorkspace.value))
+const activeNode = computed(() => connectionConfig.value.nodes.find(node => node.id === connectionConfig.value.activeNodeId) || null)
 const projectsByWorkspace = computed(() => workspaces.value.map(workspace => ({ ...workspace, projects: projects.value.filter(project => project.workspace_name === workspace.workspace_name) })))
 function isSessionMemory(memory: Memory) {
   return memory.kind.toLowerCase() === 'session' || /^sessions\//i.test(memory.path)
@@ -282,6 +283,7 @@ function fromSummary(page: PageSummary): Memory {
 }
 
 async function loadMemories(search = '') {
+  const nodeId = connectionConfig.value.activeNodeId
   if (!selectedWorkspace.value || !selectedProject.value) {
     memories.value = []
     selectedPath.value = ''
@@ -294,15 +296,19 @@ async function loadMemories(search = '') {
   try {
     const query = search.trim()
     const pages = await api<PageSummary[]>(`pages?${scopeQuery()}&limit=100${query ? `&q=${encodeURIComponent(query)}` : ''}`)
+    if (nodeId !== connectionConfig.value.activeNodeId) return
     memories.value = pages.map(fromSummary).sort(compareMemoriesByUpdatedAt)
     if (!memories.value.some(page => page.path === selectedPath.value)) selectedPath.value = memories.value[0]?.path || ''
   } catch (error) {
+    if (nodeId !== connectionConfig.value.activeNodeId) return
     apiError.value = error instanceof Error ? error.message : 'Falha ao carregar memórias.'
     memories.value = []
     selectedPath.value = ''
     selectedPage.value = null
     connectionStatus.value = 'Sem conexão'
-  } finally { loading.value = false }
+  } finally {
+    if (nodeId === connectionConfig.value.activeNodeId) loading.value = false
+  }
 }
 
 async function loadRelations() {
@@ -350,6 +356,7 @@ async function loadRelations() {
 }
 
 async function loadSessions() {
+  const nodeId = connectionConfig.value.activeNodeId
   if (!selectedWorkspace.value || !selectedProject.value) {
     sessions.value = []
     sessionsLoading.value = false
@@ -358,7 +365,9 @@ async function loadSessions() {
   sessionsLoading.value = true
   apiError.value = ''
   try {
-    sessions.value = await api<Session[]>(`sessions?${scopeQuery()}`)
+    const result = await api<Session[]>(`sessions?${scopeQuery()}`)
+    if (nodeId !== connectionConfig.value.activeNodeId) return
+    sessions.value = result
     sessionIndex.value = sessions.value
     sessionIndexError.value = ''
     if (!sessions.value.some(session => session.session_id === selectedSession.value?.session_id)) {
@@ -367,20 +376,32 @@ async function loadSessions() {
       if (selectedSession.value) void loadSessionObservations(selectedSession.value)
     }
   } catch (error) {
+    if (nodeId !== connectionConfig.value.activeNodeId) return
     apiError.value = error instanceof Error ? error.message : 'Não foi possível listar as sessões.'
     sessions.value = []
     sessionIndex.value = []
     sessionIndexError.value = error instanceof Error ? error.message : 'Não foi possível consultar o estado de consolidação das sessões.'
-  } finally { sessionsLoading.value = false }
+  } finally {
+    if (nodeId === connectionConfig.value.activeNodeId) sessionsLoading.value = false
+  }
 }
 
 async function loadOverview() {
+  const nodeId = connectionConfig.value.activeNodeId
   if (!selectedWorkspace.value || !selectedProject.value) { overview.value = null; overviewLoading.value = false; return }
   overviewLoading.value = true
   overviewError.value = ''
-  try { overview.value = await api<OverviewResponse>(`overview?${scopeQuery()}`) }
-  catch (error) { overviewError.value = error instanceof Error ? error.message : 'Não foi possível carregar a visão geral.'; overview.value = null }
-  finally { overviewLoading.value = false }
+  try {
+    const result = await api<OverviewResponse>(`overview?${scopeQuery()}`)
+    if (nodeId === connectionConfig.value.activeNodeId) overview.value = result
+  } catch (error) {
+    if (nodeId === connectionConfig.value.activeNodeId) {
+      overviewError.value = error instanceof Error ? error.message : 'Não foi possível carregar a visão geral.'
+      overview.value = null
+    }
+  } finally {
+    if (nodeId === connectionConfig.value.activeNodeId) overviewLoading.value = false
+  }
 }
 
 function openOverviewPage(path: string) {
@@ -571,17 +592,22 @@ async function loadScopes() {
 }
 
 async function loadTrash() {
+  const nodeId = connectionConfig.value.activeNodeId
   if (!canAdmin.value) { trashEntries.value = []; trashError.value = 'Configure um bearer root administrativo em Configurações para consultar e restaurar checkpoints.'; return }
   trashLoading.value = true
   trashError.value = ''
   trashMessage.value = ''
   try {
     const result = await api<{ items: TrashEntry[]; checkpoint_limit: number }>('trash')
+    if (nodeId !== connectionConfig.value.activeNodeId) return
     trashEntries.value = result.items || []
   } catch (error) {
+    if (nodeId !== connectionConfig.value.activeNodeId) return
     trashError.value = error instanceof Error ? error.message : 'Não foi possível consultar os checkpoints de exclusão.'
     trashEntries.value = []
-  } finally { trashLoading.value = false }
+  } finally {
+    if (nodeId === connectionConfig.value.activeNodeId) trashLoading.value = false
+  }
 }
 
 function openBulkDeleteDialog(paths: string[], kind: BulkDeleteDialog['kind'], label: string, workspace = selectedWorkspace.value, project = selectedProject.value) {
@@ -713,8 +739,43 @@ function openProject(project: ProjectSummary) {
   activeSection.value = 'Visão geral'
 }
 
+function clearNodeData() {
+  observationRequestId += 1
+  detailRequestId += 1
+  relationRequestId += 1
+  sessionIndexRequestId += 1
+  canAdmin.value = false
+  workspaces.value = []
+  projects.value = []
+  memories.value = []
+  sessions.value = []
+  selectedSession.value = null
+  sessionIndex.value = []
+  observations.value = []
+  relationMemories.value = []
+  trashEntries.value = []
+  overview.value = null
+  trashError.value = ''
+  trashMessage.value = ''
+  apiError.value = ''
+  relationError.value = ''
+  sessionIndexError.value = ''
+  selectedWorkspace.value = ''
+  selectedProject.value = ''
+  selectedPath.value = ''
+  selectedPage.value = null
+  scopesLoading.value = false
+  loading.value = false
+  sessionsLoading.value = false
+  observationLoading.value = false
+  relationLoading.value = false
+  trashLoading.value = false
+  overviewLoading.value = false
+  detailLoading.value = false
+}
+
 async function loadSectionData(section: string, includeMemory = true) {
-  if (!connectionConfig.value.configured) return
+  if (!activeNode.value) return
   if (section === 'Sessões') await loadSessions()
   else if (section === 'Visão geral') await loadOverview()
   else if (section === 'Lixeira') await loadTrash()
@@ -725,47 +786,31 @@ async function loadSectionData(section: string, includeMemory = true) {
 async function initializePanel() {
   initializingPanel = true
   try {
-    persistedSettings.value = await api<{ scope?: { workspace: string; project: string } }>('settings')
     try {
       connectionConfig.value = await api<ConnectionStatus>('connection')
     } catch (error) {
-      connectionConfig.value = { configured: false, endpoint: '', hasReadToken: false, hasAdminToken: false }
+      connectionConfig.value = { nodes: [], activeNodeId: '' }
+      clearNodeData()
       connectionStatus.value = 'Sem conexão'
       nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível consultar a configuração do node.'
       activeSection.value = 'Configurações'
-      workspaces.value = []
-      projects.value = []
-      memories.value = []
-      selectedWorkspace.value = ''
-      selectedProject.value = ''
-      scopesLoading.value = false
-      loading.value = false
       settingsReady.value = true
       return
     }
-    if (!connectionConfig.value.configured) {
+    if (!activeNode.value) {
+      clearNodeData()
+      persistedSettings.value = {}
       activeSection.value = 'Configurações'
-      connectionStatus.value = 'ai-memory desconectado'
-      workspaces.value = []
-      projects.value = []
-      memories.value = []
-      sessions.value = []
-      relationMemories.value = []
-      trashEntries.value = []
-      selectedWorkspace.value = ''
-      selectedProject.value = ''
-      selectedPath.value = ''
-      selectedPage.value = null
-      scopesLoading.value = false
-      loading.value = false
+      connectionStatus.value = connectionConfig.value.nodes.length ? 'Nenhum node selecionado' : 'Nenhum node cadastrado'
       settingsReady.value = true
       return
     }
+    persistedSettings.value = await api<{ scope?: { workspace: string; project: string } }>('settings')
     try {
       await api<{ level: string; version: string }>('identity')
-      connectionStatus.value = 'ai-memory conectado'
+      connectionStatus.value = `ai-memory conectado · ${activeNode.value.name}`
     } catch {
-      connectionStatus.value = 'Sem conexão'
+      connectionStatus.value = `Sem conexão · ${activeNode.value.name}`
     }
     await loadScopes()
     settingsReady.value = true
@@ -1109,6 +1154,8 @@ async function changePassword(passwords: { currentPassword: string; newPassword:
   }
 }
 async function connectAiMemory(config: {
+  id?: string
+  name: string
   endpoint: string
   readToken: string
   adminToken: string
@@ -1120,13 +1167,15 @@ async function connectAiMemory(config: {
   nodeConfigError.value = ''
   nodeConfigMessage.value = ''
   try {
-    connectionConfig.value = await api<ConnectionStatus>('connection', {
-      method: 'PUT',
+    const path = config.id ? `connection/${encodeURIComponent(config.id)}` : 'connection'
+    connectionConfig.value = await api<ConnectionStatus>(path, {
+      method: config.id ? 'PUT' : 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(config),
     })
-    connectionStatus.value = 'ai-memory conectado'
-    nodeConfigMessage.value = 'Conexão validada e salva com segurança.'
+    connectionStatus.value = 'Conectando…'
+    clearNodeData()
+    nodeConfigMessage.value = 'Node validado e salvo com segurança.'
     apiError.value = ''
     try {
       await initializePanel()
@@ -1140,32 +1189,40 @@ async function connectAiMemory(config: {
   }
 }
 
-async function disconnectAiMemory() {
+async function selectAiMemoryNode(nodeId: string) {
   if (nodeConfigBusy.value) return
   nodeConfigBusy.value = true
   nodeConfigError.value = ''
   nodeConfigMessage.value = ''
   try {
-    connectionConfig.value = await api<ConnectionStatus>('connection', { method: 'DELETE' })
-    connectionStatus.value = 'ai-memory desconectado'
-    nodeConfigMessage.value = 'Node desconectado. As credenciais salvas foram removidas.'
+    connectionConfig.value = await api<ConnectionStatus>('connection/active', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nodeId }),
+    })
     apiError.value = ''
-    canAdmin.value = false
-    workspaces.value = []
-    projects.value = []
-    memories.value = []
-    sessions.value = []
-    relationMemories.value = []
-    trashEntries.value = []
-    selectedWorkspace.value = ''
-    selectedProject.value = ''
-    selectedPath.value = ''
-    selectedPage.value = null
-    scopesLoading.value = false
-    loading.value = false
-    activeSection.value = 'Configurações'
+    connectionStatus.value = nodeId ? 'Conectando…' : 'Desconectado'
+    clearNodeData()
+    await initializePanel()
   } catch (error) {
-    nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível desconectar o node.'
+    nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível selecionar o node.'
+  } finally {
+    nodeConfigBusy.value = false
+  }
+}
+
+async function removeAiMemoryNode(nodeId: string) {
+  if (nodeConfigBusy.value) return
+  const wasActive = connectionConfig.value.activeNodeId === nodeId
+  nodeConfigBusy.value = true
+  nodeConfigError.value = ''
+  nodeConfigMessage.value = ''
+  try {
+    connectionConfig.value = await api<ConnectionStatus>(`connection/${encodeURIComponent(nodeId)}`, { method: 'DELETE' })
+    nodeConfigMessage.value = 'Node removido.'
+    if (wasActive) await initializePanel()
+  } catch (error) {
+    nodeConfigError.value = error instanceof Error ? error.message : 'Não foi possível remover o node.'
   } finally {
     nodeConfigBusy.value = false
   }
@@ -1249,7 +1306,9 @@ onBeforeUnmount(() => { systemTheme?.removeEventListener('change', onSystemTheme
         :password-message="passwordMessage"
         @theme-change="setTheme"
         @connect-node="connectAiMemory"
-        @disconnect-node="disconnectAiMemory"
+        @clear-connection-error="nodeConfigError = ''"
+        @select-node="selectAiMemoryNode"
+        @remove-node="removeAiMemoryNode"
         @change-password="changePassword"
         @logout="logout"
         @open-projects="activeSection = 'Projetos'"

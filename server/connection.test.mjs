@@ -114,30 +114,34 @@ test('node connection starts disconnected, stores encrypted credentials and can 
   const cookie = cookieFrom(setup.response)
 
   const disconnected = await request('connection', { cookie })
-  assert.deepEqual(disconnected.payload, { configured: false, endpoint: '', hasReadToken: false, hasAdminToken: false })
+  assert.deepEqual(disconnected.payload, { nodes: [], activeNodeId: '' })
 
   const scopesWhileDisconnected = await request('scopes', { cookie })
   assert.equal(scopesWhileDisconnected.response.status, 503)
   assert.match(scopesWhileDisconnected.payload.error, /Configurações/)
 
   const invalidEndpoint = await request('connection', {
-    method: 'PUT',
+    method: 'POST',
     cookie,
-    body: { endpoint: 'ftp://invalid.example/mcp', readToken },
+    body: { name: 'Node inválido', endpoint: 'ftp://invalid.example/mcp', readToken },
   })
   assert.equal(invalidEndpoint.response.status, 400)
 
   const connected = await request('connection', {
-    method: 'PUT',
+    method: 'POST',
     cookie,
-    body: { endpoint: upstreamUrl, readToken, adminToken },
+    body: { name: 'Node principal', endpoint: upstreamUrl, readToken, adminToken },
   })
-  assert.equal(connected.response.status, 200)
+  assert.equal(connected.response.status, 201)
   assert.deepEqual(connected.payload, {
-    configured: true,
-    endpoint: upstreamUrl,
-    hasReadToken: true,
-    hasAdminToken: true,
+    nodes: [{
+      id: connected.payload.nodes[0].id,
+      name: 'Node principal',
+      endpoint: upstreamUrl,
+      hasReadToken: true,
+      hasAdminToken: true,
+    }],
+    activeNodeId: connected.payload.nodes[0].id,
   })
   assert.deepEqual(receivedPaths, ['/identity', '/api/v1/workspaces', '/api/v1/projects', '/admin/checkpoints?limit=1'])
 
@@ -147,21 +151,53 @@ test('node connection starts disconnected, stores encrypted credentials and can 
   assert.equal(settings.payload.ai_memory_connection, undefined)
 
   const database = new DatabaseSync(databasePath, { readOnly: true })
-  const saved = database.prepare("SELECT value FROM app_settings WHERE key = 'ai_memory_connection'").get()
+  const saved = database.prepare('SELECT encrypted_read_token, encrypted_admin_token FROM ai_memory_nodes').get()
   database.close()
   assert.ok(saved)
-  assert.equal(saved.value.includes(readToken), false)
-  assert.equal(saved.value.includes(adminToken), false)
+  assert.equal(saved.encrypted_read_token.includes(readToken), false)
+  assert.equal(saved.encrypted_admin_token.includes(adminToken), false)
 
-  const rejectedChange = await request('connection', {
+  const nodeId = connected.payload.activeNodeId
+  const rejectedUpdate = await request(`connection/${nodeId}`, {
     method: 'PUT',
     cookie,
-    body: { endpoint: upstreamUrl, readToken: 'incorrect-token' },
+    body: { name: 'Node principal alterado', endpoint: upstreamUrl, readToken: 'incorrect-token' },
   })
-  assert.equal(rejectedChange.response.status, 401)
+  assert.equal(rejectedUpdate.response.status, 401)
   const stillConnected = await request('connection', { cookie })
-  assert.equal(stillConnected.payload.configured, true)
+  assert.equal(stillConnected.payload.nodes[0].name, 'Node principal')
 
-  const disconnectedAgain = await request('connection', { method: 'DELETE', cookie })
-  assert.deepEqual(disconnectedAgain.payload, { configured: false, endpoint: '', hasReadToken: false, hasAdminToken: false })
+  const secondNode = await request('connection', {
+    method: 'POST',
+    cookie,
+    body: { name: 'Node secundário', endpoint: upstreamUrl, readToken },
+  })
+  assert.equal(secondNode.response.status, 201)
+  assert.equal(secondNode.payload.nodes.length, 2)
+  assert.equal(secondNode.payload.activeNodeId, secondNode.payload.nodes.find(node => node.name === 'Node secundário').id)
+
+  const selectFirst = await request('connection/active', { method: 'PUT', cookie, body: { nodeId } })
+  assert.equal(selectFirst.payload.activeNodeId, nodeId)
+  const firstScope = await request('settings', {
+    method: 'PUT',
+    cookie,
+    body: { scope: { workspace: 'workspace-one', project: 'project-one' } },
+  })
+  assert.deepEqual(firstScope.payload.scope, { workspace: 'workspace-one', project: 'project-one' })
+  const selectSecond = await request('connection/active', { method: 'PUT', cookie, body: { nodeId: secondNode.payload.activeNodeId } })
+  assert.equal(selectSecond.payload.activeNodeId, secondNode.payload.activeNodeId)
+  const secondScope = await request('settings', { cookie })
+  assert.equal(secondScope.payload.scope, null)
+  const selectFirstAgain = await request('connection/active', { method: 'PUT', cookie, body: { nodeId } })
+  assert.equal(selectFirstAgain.payload.activeNodeId, nodeId)
+  const firstScopeAgain = await request('settings', { cookie })
+  assert.deepEqual(firstScopeAgain.payload.scope, { workspace: 'workspace-one', project: 'project-one' })
+  const scopesWithAdmin = await request('scopes', { cookie })
+  assert.equal(scopesWithAdmin.payload.canAdmin, true, JSON.stringify(scopesWithAdmin.payload))
+
+  const removeFirst = await request(`connection/${nodeId}`, { method: 'DELETE', cookie })
+  assert.equal(removeFirst.payload.nodes.length, 1)
+  assert.equal(removeFirst.payload.activeNodeId, '')
+  const removeActive = await request(`connection/${secondNode.payload.activeNodeId}`, { method: 'DELETE', cookie })
+  assert.deepEqual(removeActive.payload, { nodes: [], activeNodeId: '' })
 })

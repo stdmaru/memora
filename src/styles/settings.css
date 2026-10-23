@@ -70,6 +70,36 @@
   color: #b9b3c0;
 }
 
+:root[data-theme='dark'] .node-selector > label {
+  color: #b9b3c0;
+}
+
+:root[data-theme='dark'] .node-select-row select {
+  border-color: #484452;
+  background: #1e1c24;
+  color: #f0ecf2;
+}
+
+:root[data-theme='dark'] .connection-modal {
+  border-color: #3d3947;
+  background: #24222b;
+}
+
+:root[data-theme='dark'] .connection-modal > header h2 {
+  color: #e8e4ec;
+}
+
+:root[data-theme='dark'] .connection-modal > header p,
+:root[data-theme='dark'] .modal-close {
+  color: #a59eac;
+}
+
+:root[data-theme='dark'] .node-actions .disconnect-button {
+  border-color: #80534d;
+  background: #2b2428;
+  color: #f0a69b;
+}
+
 :root[data-theme='dark'] .connection-form input:not([type='checkbox']) {
   border-color: #484452;
   background: #1e1c24;
@@ -80,16 +110,6 @@
 :root[data-theme='dark'] .credential-saved,
 :root[data-theme='dark'] .credential-removal label {
   color: #a59eac;
-}
-
-:root[data-theme='dark'] .node-status {
-  background: #382926;
-  color: #f0a69b;
-}
-
-:root[data-theme='dark'] .node-status.connected {
-  background: #263329;
-  color: #a3d3a7;
 }
 
 :root[data-theme='dark'] .disconnect-confirm {
